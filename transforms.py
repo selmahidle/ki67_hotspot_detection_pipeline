@@ -18,7 +18,7 @@ class NormalizeImage(A.ImageOnlyTransform):
     Ensures the output is float32 for PyTorch compatibility.
     """
     def __init__(self, p=1.0): 
-        super(NormalizeImage, self).__init__(always_apply=False, p=p)
+        super(NormalizeImage, self).__init__(p=p)
 
     def apply(self, img, **params):
         if img is None:
@@ -129,9 +129,8 @@ class ApplyCLAHE(A.ImageOnlyTransform):
     """
     Albumentations-compatible transform to apply CLAHE using the apply_clahe function.
     """
-    def __init__(self, clip_limit=4.0, tile_grid_size=(8, 8), p=1.0): # Removed always_apply default from signature
-        # Pass always_apply=False to the superclass, let p handle probability
-        super(ApplyCLAHE, self).__init__(always_apply=False, p=p)
+    def __init__(self, clip_limit=4.0, tile_grid_size=(8, 8), p=1.0): 
+        super(ApplyCLAHE, self).__init__(p=p)
         self.clip_limit = clip_limit
         self.tile_grid_size = tile_grid_size
         logger.debug(f"ApplyCLAHE transform initialized with clip_limit={clip_limit}, tile_grid_size={tile_grid_size}, p={p}")
@@ -161,6 +160,6 @@ def get_transforms_no_clahe():
     Used for Cell Segmentation stage in the original script.
     """
     return A.Compose([
-        NormalizeImage(p=1.0), # Use p=1.0
+        NormalizeImage(p=1.0),
         ToTensorV2()
     ])

@@ -9,7 +9,6 @@ from PIL import Image
 from model_utils import create_model, load_latest_checkpoint
 from utils import convert_batchnorm_to_groupnorm 
 from pipeline import process_slide_ki67 
-from stardist_utils import load_stardist_model
 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -99,13 +98,6 @@ if __name__ == "__main__":
         exit()
     logger.info(f"Loaded {len(cell_models)} cell models.")
 
-    # Load StarDist model
-    logger.info("Loading StarDist Model...")
-    stardist_model = load_stardist_model() 
-    if stardist_model is None:
-        logger.error(f"Failed to load StarDist model. Exiting.")
-        exit()
-
 
     # --- Process Slide ---
     logger.info(f"Starting Ki67 hotspot analysis for: {args.slide_path}")
@@ -114,7 +106,6 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         tumor_models=tumor_models,
         cell_models=cell_models,
-        stardist_model=stardist_model,
         device=device
     )
 
