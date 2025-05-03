@@ -4,14 +4,28 @@ import logging
 import traceback
 from pathlib import Path
 import pickle
-
 import torch
 import torch.nn as nn
 import segmentation_models_pytorch as smp
+from utils import convert_batchnorm_to_groupnorm 
 
 
 logger = logging.getLogger(__name__)
 
+def load_models_from_subdirs(base_dir, model_type, encoder, device, apply_groupnorm=False):
+    model_list = []
+    subdirs = [d for d in glob.glob(os.path.join(base_dir, '*')) if os.path.isdir(d)]
+    for subdir in subdirs:
+        model = create_model(model_type, encoder, None, num_classes=2, activation='sigmoid')
+        if apply_groupnorm:
+            model = convert_batchnorm_to_groupnorm(model)
+        model.to(device)
+        model = load_latest_checkpoint(model, subdir, device)
+        if model is not None:
+            model.to(device)
+            model_list.append(model)
+    return model_list
+    
 
 def create_model(model_type, encoder, encoder_weights, num_classes, activation):
     """

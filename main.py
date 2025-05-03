@@ -6,13 +6,11 @@ from pathlib import Path
 import torch
 from PIL import Image
 from model_utils import create_model, load_latest_checkpoint, load_models_from_subdirs
-from utils import convert_batchnorm_to_groupnorm 
 from pipeline import process_slide_ki67 
 from datetime import datetime
 
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+
 Image.MAX_IMAGE_PIXELS = None
 
 
@@ -85,10 +83,19 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    log_file = os.path.join(args.output_dir, "pipeline.log")
+    logging.basicConfig(
+        filename=log_file,
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s"
+    )
+
+    logger = logging.getLogger(__name__)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
-
-    os.makedirs(args.output_dir, exist_ok=True)
 
     # --- Load Models ---
     logger.info("Loading Models...")
