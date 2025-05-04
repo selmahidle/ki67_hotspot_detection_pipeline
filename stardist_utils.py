@@ -19,72 +19,8 @@ import time
 
 logger = logging.getLogger(__name__)
 
-def format_for_save(img_array):
-    """Converts image array to 3-channel uint8 for saving."""
-    func_name = "format_for_save"
-    if not isinstance(img_array, np.ndarray):
-         print(f"Warning [{func_name}]: Received non-ndarray input type {type(img_array)}. Returning small black image.")
-         return np.zeros((100, 100, 3), dtype=np.uint8)
 
-    if img_array.size == 0:
-         print(f"Warning [{func_name}]: Received empty ndarray. Returning small black image.")
-         return np.zeros((100, 100, 3), dtype=np.uint8)
-
-    # Check if input is already uint8
-    if img_array.dtype == np.uint8:
-        img_ubyte = img_array
-    else:
-        # Normalize float arrays to 0-1 if they exceed 1.0 or have negative values
-        if img_array.dtype in (np.float32, np.float64, float):
-            max_val = np.max(img_array)
-            min_val = np.min(img_array)
-            if min_val < 0 or max_val > 1.0:
-                if np.isclose(min_val, max_val): # Handle constant image
-                    img_array = np.zeros_like(img_array) if min_val < 0.5 else np.ones_like(img_array)
-                else:
-                    img_array = (img_array - min_val) / (max_val - min_val) # Scale to 0-1
-            # Clamp slightly to avoid potential floating point issues at boundaries
-            img_array = np.clip(img_array, 0, 1)
-        # Convert to uint8
-        try:
-            # Use img_as_ubyte which scales 0-1 float to 0-255 uint8
-            with warnings.catch_warnings(): # Suppress potential loss of precision warning
-                warnings.simplefilter("ignore")
-                img_ubyte = img_as_ubyte(img_array)
-        except ValueError as e:
-            print(f"Warning [{func_name}]: img_as_ubyte failed ({e}). Returning black image. Input stats: min={np.min(img_array)}, max={np.max(img_array)}, dtype={img_array.dtype}")
-            h, w = img_array.shape[:2] if img_array.ndim >= 2 else (100, 100)
-            return np.zeros((h, w, 3), dtype=np.uint8)
-
-
-    # Ensure 3 channels
-    if img_ubyte.ndim == 2:
-        return np.stack([img_ubyte] * 3, axis=-1)
-    elif img_ubyte.ndim == 3:
-        if img_ubyte.shape[2] == 1:
-            return np.concatenate([img_ubyte] * 3, axis=-1)
-        elif img_ubyte.shape[2] == 4: # Handle RGBA, drop alpha
-            return img_ubyte[..., :3]
-        elif img_ubyte.shape[2] == 3:
-            return img_ubyte # Already correct format
-        else:
-            print(f"Warning [{func_name}]: Unexpected channel count ({img_ubyte.shape[2]}) in image with shape {img_ubyte.shape}. Returning first 3 channels if possible, else black.")
-            h, w = img_ubyte.shape[:2]
-            if img_ubyte.shape[2] > 3:
-                return img_ubyte[..., :3] # Try taking first 3
-            else:
-                return np.zeros((h, w, 3), dtype=np.uint8)
-    else:
-        print(f"Warning [{func_name}]: Unexpected dimensions ({img_ubyte.ndim}) in image with shape {img_ubyte.shape}. Returning black image.")
-        # Try to get H, W if possible
-        try:
-             h, w = img_ubyte.shape[:2]
-             return np.zeros((h, w, 3), dtype=np.uint8)
-        except:
-             return np.zeros((100, 100, 3), dtype=np.uint8)
-
-
-def predict_patch_stardist(image_patch_rgb, actual_pixel_size_um):
+def predict_patch_stardist(model, image_patch_rgb, actual_pixel_size_um):
     """
     Runs StarDist prediction on a single RGB image patch using predefined default
     parameters matching the reference script, unless overridden. Requires the
@@ -113,8 +49,6 @@ def predict_patch_stardist(image_patch_rgb, actual_pixel_size_um):
     os.makedirs(save_folder, exist_ok=True)
     print(f"Saving outputs to: {save_folder}")
 
-    model_name = '2D_versatile_he'
-    model = StarDist2D.from_pretrained(model_name)
 
     # --- Define Prediction Parameters (Mapped from QuPath) ---
     probability_threshold = 0.5 # QuPath: Detection probability threshold 0.5 fra før
@@ -185,7 +119,6 @@ def predict_patch_stardist(image_patch_rgb, actual_pixel_size_um):
             preserve_range=True,         # Keep original label values (important!)
             anti_aliasing=False          # No anti-aliasing for labels
         )
-        # Ensure integer type after resize
         labels_pred = labels_pred.astype(np.uint16)
     else:
         print("No rescaling was applied, using predicted labels directly.")
@@ -327,6 +260,7 @@ def predict_patch_stardist(image_patch_rgb, actual_pixel_size_um):
 
 def refine_hotspot_with_stardist(
     candidate_hotspot: dict,
+    stardist_model,
     slide: openslide.OpenSlide,
     dab_plus_mask_l2: np.ndarray,
     cell_mask_binary_l2: np.ndarray,
@@ -427,7 +361,7 @@ def refine_hotspot_with_stardist(
                  hs_debug_dir = None # Disable further debug saving
 
         # --- Run StarDist Prediction ---
-        labels_filtered, details, label_shape = predict_patch_stardist(hs_patch_rgb, actual_pixel_size_um)
+        labels_filtered, details, label_shape = predict_patch_stardist(stardist_model, hs_patch_rgb, actual_pixel_size_um)
 
         # --- Initialize Counts ---
         hotspot['stardist_total_count'] = 0

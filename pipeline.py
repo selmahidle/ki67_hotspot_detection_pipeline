@@ -9,6 +9,7 @@ from PIL import Image
 from skimage.measure import label, regionprops
 from tqdm import tqdm
 import sys
+from stardist.models import StarDist2D
 
 # --- Local Application Imports ---
 from transforms import get_transforms, get_transforms_no_clahe
@@ -529,10 +530,14 @@ def process_slide_ki67(slide_path, output_dir, tumor_models, cell_models, device
                 actual_pixel_size_um = default_mpp
                 logger.warning(f"Could not determine reliable MPP. Falling back to default: {actual_pixel_size_um:.4f} um/pixel. ACCURACY MAY BE AFFECTED.")
 
+            model_name = '2D_versatile_he'
+            model = StarDist2D.from_pretrained(model_name)
+
             # --- Refine each candidate ---
             for i, candidate in enumerate(tqdm(candidate_hotspots, desc="Refining Hotspots")):
                 updated_hotspot = refine_hotspot_with_stardist(
                     candidate_hotspot=candidate,
+                    stardist_model=model,
                     slide=slide,
                     dab_plus_mask_l2=dab_plus_mask_l2,
                     cell_mask_binary_l2=cell_mask_binary_l2,
