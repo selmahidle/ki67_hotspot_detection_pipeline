@@ -196,13 +196,6 @@ def load_latest_checkpoint(model, checkpoint_dir, device):
 
     # --- Determine final flag and add Debug Prints ---
     final_weights_only_flag = not use_weights_only_false
-    # print(f"\n--- DEBUG: load_latest_checkpoint ---") # Optional: Use logger.debug instead of print
-    # print(f"Input checkpoint_dir: {checkpoint_dir}")
-    # print(f"Normalized base_dir_name: {base_dir_name}")
-    # print(f"Checking for 'model1_fra_henrik' in lowercase: {use_weights_only_false}")
-    # print(f"Flag use_weights_only_false: {use_weights_only_false}")
-    # print(f"Calling load_model_checkpoint with weights_only = {final_weights_only_flag}")
-    # print(f"-------------------------------------\n")
     logger.debug(f"Checkpoint Dir: {checkpoint_dir}, Base: {base_dir_name}, Use weights_only=False Flag: {use_weights_only_false}, Final weights_only value: {final_weights_only_flag}") # Use logger instead
     # ------------------------------------------------------
 

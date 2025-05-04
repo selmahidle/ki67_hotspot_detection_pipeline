@@ -9,23 +9,20 @@ from PIL import Image
 from skimage.measure import label, regionprops
 from tqdm import tqdm
 import sys
-from stardist.models import StarDist2D
-
-# --- Local Application Imports ---
 from transforms import get_transforms, get_transforms_no_clahe
 from tissue_detection import detect_tissue
 from patching import run_inference_on_patches
-from utils import create_weight_map
+from utils import create_weight_map, get_actual_pixel_size_um
 from stain_utils import get_dab_mask
 from hotspot_detection import identify_hotspots
 from visualization import generate_overlay 
 from stardist_utils import refine_hotspot_with_stardist
 
 logger = logging.getLogger(__name__)
-Image.MAX_IMAGE_PIXELS = None # Allow loading large images if needed by PIL indirectly
+Image.MAX_IMAGE_PIXELS = None 
 
-# --- Modify function signature ---
-def process_slide_ki67(slide_path, output_dir, tumor_models, cell_models, device):
+
+def process_slide_ki67(slide_path, output_dir, tumor_models, cell_models, stardist_model, device):
     """
     Process a slide for Ki67 analysis using tumor segmentation, cell segmentation (SMP),
     and StarDist-based hotspot refinement.
@@ -169,7 +166,7 @@ def process_slide_ki67(slide_path, output_dir, tumor_models, cell_models, device
                         else: logger.error(f"cv2.imwrite failed for ds4!"); ds4_img = None # Reset ds4_img if save fails
                 except openslide.OpenSlideError as ose: logger.error(f"OpenSlideError during ds4 generation: {ose}", exc_info=True); ds4_img = None
                 except MemoryError as me: logger.error(f"MemoryError during ds4 generation: {me}", exc_info=True); raise me # Re-raise
-                except Exception as gen_err: logger.error(f"Unhandled Exception during ds4 generation: {gen_err}", exc_info=True); print(f"Unhandled Exception: {gen_err}", file=sys.stderr); traceback.print_exc(file=sys.stderr); ds4_img = None
+                except Exception as gen_err: logger.error(f"Unhandled Exception during ds4 generation: {gen_err}", exc_info=True)
 
         if ds4_img is None: logger.error("Failed to load or generate ds4 image. Cannot proceed."); return None
         else: logger.info(f"--- DS4 End: Successfully obtained ds4_img, shape {ds4_img.shape} ---")
@@ -489,7 +486,7 @@ def process_slide_ki67(slide_path, output_dir, tumor_models, cell_models, device
              logger.warning("Coarse target mask for hotspot candidates is empty. No candidates will be found.")
         else:
              logger.info(f"Identifying initial hotspot candidates based on DAB+ & SMP+ density...")
-             num_initial_candidates = max(hotspot_top_n * 4, 15)
+             num_initial_candidates = 10
              candidate_hotspots = identify_hotspots(
                  slide=slide, level=hotspot_level,
                  hotspot_target_mask=hotspot_target_mask_coarse,
@@ -510,34 +507,16 @@ def process_slide_ki67(slide_path, output_dir, tumor_models, cell_models, device
 
             refinement_debug_base_dir = os.path.join(hotspot_debug_dir, "refinement_patches")
             os.makedirs(refinement_debug_base_dir, exist_ok=True)
-
-            # --- Determine Actual Pixel Size (MPP) ---
-            mpp_x_str = slide.properties.get(openslide.PROPERTY_NAME_MPP_X)
-            mpp_y_str = slide.properties.get(openslide.PROPERTY_NAME_MPP_Y)
-            actual_pixel_size_um = None
-            default_mpp = 0.25 # Example fallback
-
-            if mpp_x_str and mpp_y_str:
-                try:
-                    mpp_x = float(mpp_x_str); mpp_y = float(mpp_y_str)
-                    if 0.1 < mpp_x < 1.0 and 0.1 < mpp_y < 1.0:
-                         actual_pixel_size_um = (mpp_x + mpp_y) / 2.0
-                         logger.info(f"Using MPP from slide properties: X={mpp_x:.4f}, Y={mpp_y:.4f}. Average used: {actual_pixel_size_um:.4f} um/pixel")
-                    else: logger.warning(f"MPP values ({mpp_x}, {mpp_y}) seem outside expected range.")
-                except ValueError: logger.warning(f"Could not convert MPP properties to float.")
-
+            actual_pixel_size_um = get_actual_pixel_size_um(slide, level=hotspot_level, fallback_value=0.25)
             if actual_pixel_size_um is None:
-                actual_pixel_size_um = default_mpp
-                logger.warning(f"Could not determine reliable MPP. Falling back to default: {actual_pixel_size_um:.4f} um/pixel. ACCURACY MAY BE AFFECTED.")
-
-            model_name = '2D_versatile_he'
-            model = StarDist2D.from_pretrained(model_name)
+                logger.error("Failed to determine actual pixel size. Skipping StarDist refinement.")
+                return None
 
             # --- Refine each candidate ---
             for i, candidate in enumerate(tqdm(candidate_hotspots, desc="Refining Hotspots")):
                 updated_hotspot = refine_hotspot_with_stardist(
                     candidate_hotspot=candidate,
-                    stardist_model=model,
+                    stardist_model=stardist_model,
                     slide=slide,
                     dab_plus_mask_l2=dab_plus_mask_l2,
                     cell_mask_binary_l2=cell_mask_binary_l2,
