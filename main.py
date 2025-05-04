@@ -8,7 +8,7 @@ from PIL import Image
 from model_utils import create_model, load_latest_checkpoint, load_models_from_subdirs
 from pipeline import process_slide_ki67 
 from datetime import datetime
-
+from stardist.models import StarDist2D
 
 
 Image.MAX_IMAGE_PIXELS = None
@@ -112,6 +112,8 @@ if __name__ == "__main__":
 
     logger.info(f"Loaded {len(tumor_models)} tumor models and {len(cell_models)} cell models.")
 
+    model = StarDist2D.from_pretrained('2D_versatile_he')
+
     # --- Process Slide ---
     logger.info(f"Starting Ki67 hotspot analysis for: {args.slide_path}")
     hotspot_results = process_slide_ki67(
@@ -119,6 +121,7 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         tumor_models=tumor_models,
         cell_models=cell_models,
+        stardist_model=model,
         device=device
     )
 
