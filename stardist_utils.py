@@ -55,23 +55,17 @@ def predict_patch_stardist(model, image_patch_rgb, actual_pixel_size_um):
     nms_overlap_threshold = 0.3 
     target_pixel_size = 0.2      # QuPath: Requested pixel size (µm) 0.3 fra før
 
-    # ================== IMPORTANT ==================
-    #  You MUST set this value to the actual pixel size of YOUR images in MICRONS
-    #  If your images are already at the target_pixel_size, set this to target_pixel_size
-    ACTUAL_PIXEL_SIZE_MICRONS = 1.0 # <<<--- REPLACE THIS VALUE: e.g., 0.25 if original is 0.25 um/pix 0.23 hvis heile slides
-    # ===============================================
-
     print(f"\nProcessing file for stardist")
     print(f"Loaded hotspot shape: {image_patch_rgb.shape}, dtype: {image_patch_rgb.dtype}")
     img_to_process = img_as_float(image_patch_rgb)
 
-    if ACTUAL_PIXEL_SIZE_MICRONS is None or target_pixel_size is None:
+    if actual_pixel_size_um is None or target_pixel_size is None:
         print("  Pixel size info missing. Skipping rescaling.")
-    elif abs(ACTUAL_PIXEL_SIZE_MICRONS - target_pixel_size) < 1e-6:
-        print(f"  Actual pixel size ({ACTUAL_PIXEL_SIZE_MICRONS:.3f}) matches target ({target_pixel_size:.3f}). No rescaling needed.")
+    elif abs(actual_pixel_size_um - target_pixel_size) < 1e-6:
+        print(f"  Actual pixel size ({actual_pixel_size_um:.3f}) matches target ({target_pixel_size:.3f}). No rescaling needed.")
     else:
-        rescale_factor = ACTUAL_PIXEL_SIZE_MICRONS / target_pixel_size
-        print(f"Rescaling prediction input image by factor {rescale_factor:.4f} (from {ACTUAL_PIXEL_SIZE_MICRONS:.3f} to {target_pixel_size:.3f} um/pix)...")
+        rescale_factor = actual_pixel_size_um / target_pixel_size
+        print(f"Rescaling prediction input image by factor {rescale_factor:.4f} (from {actual_pixel_size_um:.3f} to {target_pixel_size:.3f} um/pix)...")
         start_time = time.time()
 
         img_to_process = rescale(
@@ -106,10 +100,9 @@ def predict_patch_stardist(model, image_patch_rgb, actual_pixel_size_um):
     n_objects = labels_pred_scaled.max()
 
     # --- Resize Label Mask Back to Original Image Size ---
-    labels_pred = None # Initialize
+    labels_pred = None 
     # Target shape should match the original image dimensions before any rescaling
     original_shape = image_patch_rgb.shape[:2] # Use the shape of the initial RGB image
-
 
     if abs(rescale_factor - 1.0) > 1e-6:
         labels_pred = resize(
@@ -265,9 +258,9 @@ def refine_hotspot_with_stardist(
     dab_plus_mask_l2: np.ndarray,
     cell_mask_binary_l2: np.ndarray,
     hotspot_level: int,
-    actual_pixel_size_um: float = 1.0, # Use constant as default
+    actual_pixel_size_um: float,  # <-- Add this line
     debug_dir: str = None,
-    candidate_index: int = 0 # For debug filenames
+    candidate_index: int = 0
 ) -> dict | None:
     """
     Performs StarDist prediction on a candidate hotspot patch and calculates
@@ -304,9 +297,6 @@ def refine_hotspot_with_stardist(
     if  slide is None or dab_plus_mask_l2 is None or cell_mask_binary_l2 is None:
          logger.error(f"[{func_name}] Missing required input model or mask for candidate {candidate_index+1}.")
          return None
-    if actual_pixel_size_um <= 0:
-        logger.error(f"[{func_name}] Invalid actual_pixel_size_um: {actual_pixel_size_um} for candidate {candidate_index+1}.")
-        return None
 
     try:
         # --- Get Coordinates and Read Patch ---
@@ -509,11 +499,8 @@ def refine_hotspot_with_stardist(
             logger.debug(f"[{func_name}] Candidate {candidate_index+1}: Counts - Total(Unfilt)={hotspot['stardist_total_count']}, Total(Filt)={hotspot['stardist_total_count_filtered']}, In SMP Area={smp_cell_area_count}, DAB+&SMP+={positive_count}")
 
         else:
-            # Case where StarDist found no valid centroids
             logger.debug(f"[{func_name}] Candidate {candidate_index+1}: No valid centroids found by StarDist. All counts remain 0.")
-            # All count keys were already initialized to 0
 
-        # Return the updated dictionary containing the counts
         return hotspot
 
     except Exception as e:
