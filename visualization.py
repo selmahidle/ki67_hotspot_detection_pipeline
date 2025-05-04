@@ -1,5 +1,3 @@
-# Inside visualization.py
-
 import logging
 import os
 import numpy as np
@@ -19,71 +17,63 @@ def format_for_save(img_array):
     """Converts image array to 3-channel uint8 for saving."""
     func_name = "format_for_save"
     if not isinstance(img_array, np.ndarray):
-         logger.warning(f"[{func_name}]: Received non-ndarray type {type(img_array)}. Returning black.")
+         logger.warning(f"[{func_name}]: Received non-ndarray input type {type(img_array)}. Returning small black image.")
          return np.zeros((100, 100, 3), dtype=np.uint8)
+
     if img_array.size == 0:
-         logger.warning(f"[{func_name}]: Received empty ndarray. Returning black.")
+         logger.warning(f"[{func_name}]: Received empty ndarray. Returning small black image.")
          return np.zeros((100, 100, 3), dtype=np.uint8)
 
-    img_ubyte = None # Initialize
-
-    # Convert to uint8 if not already
     if img_array.dtype == np.uint8:
         img_ubyte = img_array
-    # Handle float: scale 0-1 if needed, then convert
-    elif np.issubdtype(img_array.dtype, np.floating): # Check if it's any float type
-        min_val, max_val = np.min(img_array), np.max(img_array)
-        # Check if already in 0-1 range (allow small tolerance)
-        if not (min_val >= -1e-6 and max_val <= 1.0 + 1e-6):
-             # Needs scaling
-             logger.debug(f"[{func_name}]: Scaling float array from [{min_val}, {max_val}] to [0, 1].")
-             if np.isclose(min_val, max_val):
-                 img_array = np.zeros_like(img_array) if min_val < 0.5 else np.ones_like(img_array)
-             else:
-                 img_array = (img_array - min_val) / (max_val - min_val + 1e-9) # Add epsilon for safety
-        img_array = np.clip(img_array, 0, 1) # Clip after potential scaling
+    else:
+        # Normalize float arrays to 0-1 if they exceed 1.0 or have negative values
+        if img_array.dtype in (np.float32, np.float64, float):
+            max_val = np.max(img_array)
+            min_val = np.min(img_array)
+            if min_val < 0 or max_val > 1.0:
+                if np.isclose(min_val, max_val): # Handle constant image
+                    img_array = np.zeros_like(img_array) if min_val < 0.5 else np.ones_like(img_array)
+                else:
+                    img_array = (img_array - min_val) / (max_val - min_val) # Scale to 0-1
+            # Clamp slightly to avoid potential floating point issues at boundaries
+            img_array = np.clip(img_array, 0, 1)
+        # Convert to uint8
         try:
-            with warnings.catch_warnings():
+            # Use img_as_ubyte which scales 0-1 float to 0-255 uint8
+            with warnings.catch_warnings(): # Suppress potential loss of precision warning
                 warnings.simplefilter("ignore")
                 img_ubyte = img_as_ubyte(img_array)
-        except Exception as e:
-             logger.warning(f"[{func_name}]: img_as_ubyte failed ({e}). Returning black. Stats: min={np.min(img_array)}, max={np.max(img_array)}, dtype={img_array.dtype}")
-             h=img_array.shape[0] if img_array.ndim>=1 else 100; w=img_array.shape[1] if img_array.ndim>=2 else 100
-             return np.zeros((h,w,3),dtype=np.uint8)
-    # *** MODIFIED PART START ***
-    # Handle integer types (int32, int64, etc.) expected from mask operations
-    elif np.issubdtype(img_array.dtype, np.integer):
-         logger.debug(f"[{func_name}]: Input dtype is {img_array.dtype}. Clipping to 0-255 and converting to uint8.")
-         # Clip values to the valid uint8 range and cast
-         img_ubyte = np.clip(img_array, 0, 255).astype(np.uint8)
-    # *** MODIFIED PART END ***
-    else:
-         # Handle other unexpected types - Log a warning here
-         logger.warning(f"[{func_name}]: Unexpected dtype {img_array.dtype}. Attempting clip to 0-255 and cast to uint8.")
-         try:
-            img_ubyte = np.clip(img_array, 0, 255).astype(np.uint8)
-         except Exception as e_cast:
-              logger.error(f"[{func_name}]: Failed to cast unexpected dtype {img_array.dtype} to uint8: {e_cast}. Returning black.")
-              h=img_array.shape[0] if img_array.ndim>=1 else 100; w=img_array.shape[1] if img_array.ndim>=2 else 100
-              return np.zeros((h,w,3),dtype=np.uint8)
+        except ValueError as e:
+            logger.warning(f"[{func_name}]: img_as_ubyte failed ({e}). Returning black image. Input stats: min={np.min(img_array)}, max={np.max(img_array)}, dtype={img_array.dtype}")
+            h, w = img_array.shape[:2] if img_array.ndim >= 2 else (100, 100)
+            return np.zeros((h, w, 3), dtype=np.uint8)
 
     # Ensure 3 channels
-    if img_ubyte.ndim == 2: return np.stack([img_ubyte] * 3, axis=-1)
+    if img_ubyte.ndim == 2:
+        return np.stack([img_ubyte] * 3, axis=-1)
     elif img_ubyte.ndim == 3:
-        if img_ubyte.shape[2] == 1: return np.concatenate([img_ubyte] * 3, axis=-1)
-        elif img_ubyte.shape[2] == 4: return img_ubyte[..., :3] # Drop alpha
-        elif img_ubyte.shape[2] == 3: return img_ubyte # Correct format
+        if img_ubyte.shape[2] == 1:
+            return np.concatenate([img_ubyte] * 3, axis=-1)
+        elif img_ubyte.shape[2] == 4: # Handle RGBA, drop alpha
+            return img_ubyte[..., :3]
+        elif img_ubyte.shape[2] == 3:
+            return img_ubyte 
         else:
-            logger.warning(f"[{func_name}]: Input has {img_ubyte.shape[2]} channels. Cannot format to 3 channels. Returning black.");
-            h,w=img_ubyte.shape[:2]; return np.zeros((h,w,3),dtype=np.uint8)
+            logger.warning(f"[{func_name}]: Unexpected channel count ({img_ubyte.shape[2]}) in image with shape {img_ubyte.shape}. Returning first 3 channels if possible, else black.")
+            h, w = img_ubyte.shape[:2]
+            if img_ubyte.shape[2] > 3:
+                return img_ubyte[..., :3]
+            else:
+                return np.zeros((h, w, 3), dtype=np.uint8)
     else:
-        logger.warning(f"[{func_name}]: Input has unexpected dimensions ({img_ubyte.ndim}). Returning black.");
-        return np.zeros((100, 100, 3), dtype=np.uint8)
+        logger.warning(f"[{func_name}]: Unexpected dimensions ({img_ubyte.ndim}) in image with shape {img_ubyte.shape}. Returning black image.")
+        try:
+             h, w = img_ubyte.shape[:2]
+             return np.zeros((h, w, 3), dtype=np.uint8)
+        except:
+             return np.zeros((100, 100, 3), dtype=np.uint8)
 
-# ...(rest of visualization.py remains the same)...
-
-# Make sure to include the save_stardist_comparison_plot function and generate_overlay function below this one
-# (Their code doesn't need changes based on this specific warning)
 
 def save_stardist_comparison_plot(hs_patch_rgb, labels_filtered, ref_mask, save_path):
     """
