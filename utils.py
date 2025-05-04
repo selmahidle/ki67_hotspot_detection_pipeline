@@ -2,9 +2,77 @@ import numpy as np
 import torch
 import torch.nn as nn
 import logging
+import openslide
 
 
 logger = logging.getLogger(__name__)
+
+
+def get_actual_pixel_size_um(slide: openslide.OpenSlide, level: int, fallback_value: float = 0.25) -> float | None:
+    """
+    Retrieves the average pixel size (microns per pixel) for a specific level
+    from OpenSlide slide metadata.
+
+    Args:
+        slide: The OpenSlide object.
+        level (int): The desired WSI level for which to calculate the pixel size.
+        fallback_value (float): Value to use if Level 0 MPP metadata is missing or invalid.
+
+    Returns:
+        float: Actual pixel size in microns for the specified level, or None if level is invalid.
+               Returns the fallback value * adjusted for the level * if L0 MPP is invalid.
+               Logs warnings if metadata is missing/invalid or fallback is used.
+    """
+    if not isinstance(slide, openslide.OpenSlide):
+        logger.error("Invalid slide object passed.")
+        return None
+    if not (0 <= level < slide.level_count):
+        logger.error(f"Invalid level ({level}) requested. Slide has {slide.level_count} levels.")
+        return None
+
+    mpp_x = None
+    mpp_y = None
+    mpp_l0 = None # Store determined Level 0 MPP
+
+    try:
+        mpp_x_str = slide.properties.get(openslide.PROPERTY_NAME_MPP_X)
+        mpp_y_str = slide.properties.get(openslide.PROPERTY_NAME_MPP_Y)
+
+        if mpp_x_str and mpp_y_str:
+            mpp_x = float(mpp_x_str)
+            mpp_y = float(mpp_y_str)
+            # Basic plausibility check (adjust range if needed)
+            if 0.1 <= mpp_x <= 1.0 and 0.1 <= mpp_y <= 1.0:
+                 mpp_l0 = (mpp_x + mpp_y) / 2.0
+                 logger.info(f"MPP L0 from slide: X={mpp_x:.4f}, Y={mpp_y:.4f} -> Avg={mpp_l0:.4f} µm/px")
+            else:
+                 logger.warning(f"MPP L0 values ({mpp_x}, {mpp_y}) seem outside expected range (0.1-1.0).")
+        else:
+            logger.warning("MPP L0 properties not found in slide metadata.")
+
+    except (ValueError, TypeError) as e:
+        logger.warning(f"Could not parse MPP L0 values: {e}")
+    except Exception as e:
+         logger.error(f"Unexpected error reading MPP L0 properties: {e}", exc_info=True)
+
+    if mpp_l0 is None:
+        mpp_l0 = fallback_value
+        logger.warning(f"Falling back to default L0 MPP: {mpp_l0:.4f} µm/px.")
+
+    # Calculate MPP for the requested level
+    try:
+        downsample_at_level = slide.level_downsamples[level]
+        mpp_at_level = mpp_l0 * downsample_at_level
+        logger.info(f"Calculated MPP for Level {level}: {mpp_at_level:.4f} µm/px (L0 MPP: {mpp_l0:.4f}, Downsample: {downsample_at_level:.2f})")
+        return mpp_at_level
+    except IndexError:
+        # This shouldn't happen due to the level check at the start, but belts and suspenders
+        logger.error(f"Level {level} downsample factor not found unexpectedly.")
+        return None
+    except Exception as e:
+         logger.error(f"Error calculating MPP at level {level}: {e}", exc_info=True)
+         return None
+
 
 def convert_batchnorm_to_groupnorm(module):
     """
