@@ -166,7 +166,7 @@ def identify_hotspots(slide, level, hotspot_target_mask,
                 w, h = hotspot['size_level']
                 color = colors[i % len(colors)]
                 # Draw rectangle boundary
-                cv2.rectangle(hotspot_top_vis, (x, y), (x+w, y+h), color, max(1, int(level_w * 0.002))) # Thickness relative to image size
+                cv2.rectangle(hotspot_top_vis, (x, y), (x+w, y+h), color, max(1, int(level_w * 0.0015))) # Thickness relative to image size
                 # Add text label (Hotspot number and score)
                 score_text = f"#{i+1}: {hotspot['density_score']:.3f}"
                 cv2.putText(hotspot_top_vis, score_text, (x + 5, y + 20), font, 0.6, color, 2)

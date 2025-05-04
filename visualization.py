@@ -235,9 +235,9 @@ def generate_overlay(slide, overlay_level, hotspot_level,
         cell_boundary_color=(0,255,255) # Yellow
         dab_contour_color=(0,0,255) # Red
         hotspot_colors=[(0,0,255),(0,255,255),(255,0,255),(255,255,0),(0,255,0)] # BGR: Red, Yellow, Magenta, Cyan, Green
-        contour_thickness_tissue=max(1, int(overlay_w * 0.0015)) # Relative thickness
+        contour_thickness_tissue=max(1, int(overlay_w * 0.001)) # Relative thickness
         contour_thickness_tumor=max(1, int(overlay_w * 0.001))
-        hotspot_thickness=max(4, int(overlay_w * 0.004)) # Make hotspot border thicker
+        hotspot_thickness=max(4, int(overlay_w * 0.003)) # Make hotspot border thicker
         dab_contour_thickness=max(1, int(overlay_w * 0.0005))
         font=cv2.FONT_HERSHEY_SIMPLEX
         font_scale=max(0.8, overlay_w / 10000.0) # Scale font with image width

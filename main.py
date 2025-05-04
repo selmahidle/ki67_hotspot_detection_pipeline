@@ -15,46 +15,69 @@ Image.MAX_IMAGE_PIXELS = None
 
 
 def write_hotspot_results(hotspot_results, output_dir, slide_path, hotspot_level=2):
-    logger = logging.getLogger(__name__)
+    """
+    Writes the hotspot analysis results to a text file, using counts derived
+    from local DAB classification per nucleus.
+    """
+    logger = logging.getLogger(__name__) # Get logger inside function if not passed
 
-    results_file = os.path.join(output_dir, Path(slide_path).stem + "_hotspots_stardist.txt")
-    with open(results_file, 'w') as f:
-        f.write(f"Slide: {Path(slide_path).name}\n")
-        f.write(f"Identified {len(hotspot_results)} final hotspots (ranked by StarDist counts).\n")
-        f.write("-" * 30 + "\n")
+    # Check if hotspot_results is empty or None
+    if not hotspot_results:
+        logger.warning("No hotspot results provided to write_hotspot_results. Skipping file creation.")
+        return
 
-        for i, hs in enumerate(hotspot_results):
-            f.write(f"Hotspot {i+1}:\n")
-            f.write(f"  Level 0 Coords (x,y): {hs.get('coords_l0', 'N/A')}\n")
-            f.write(f"  Level 0 Size (w,h): {hs.get('size_l0', 'N/A')}\n")
-            f.write(f"  Level {hs.get('level', hotspot_level)} Coords (x,y): {hs.get('coords_level', 'N/A')}\n")
-            f.write(f"  Level {hs.get('level', hotspot_level)} Size (w,h): {hs.get('size_level', 'N/A')}\n")
+    results_file = os.path.join(output_dir, Path(slide_path).stem + "_hotspots_stardist_localDAB.txt") # Added suffix
+    try:
+        with open(results_file, 'w') as f:
+            f.write(f"Slide: {Path(slide_path).name}\n")
+            # Filter results to only include those that potentially have the new keys
+            valid_results = [hs for hs in hotspot_results if isinstance(hs, dict)]
+            f.write(f"Processed {len(valid_results)} candidate hotspots (ranked by local DAB Ki67+ count).\n")
+            f.write("-" * 30 + "\n")
 
-            stardist_dab_smp_count = hs.get('stardist_dab_smp_cell_count', 0)
-            stardist_smp_count = hs.get('stardist_smp_cell_count', 0)
-            stardist_total = hs.get('stardist_total_count', 0)
+            # Sort results by the new Ki67+ count before writing (optional, but good practice)
+            # Use .get with a default of 0 to handle cases where a candidate might have failed refinement
+            valid_results.sort(key=lambda hs: hs.get('stardist_ki67_pos_count', 0), reverse=True)
 
-            try:
-                ki67_index = (float(stardist_dab_smp_count) / float(stardist_smp_count)) * 100.0 if stardist_smp_count > 0 else 0.0
-            except (ValueError, TypeError):
-                ki67_index = 'N/A'
+            for i, hs in enumerate(valid_results):
+                f.write(f"Hotspot {i+1}:\n")
+                f.write(f"  Level 0 Coords (x,y): {hs.get('coords_l0', 'N/A')}\n")
+                f.write(f"  Level 0 Size (w,h): {hs.get('size_l0', 'N/A')}\n")
+                f.write(f"  Level {hs.get('level', hotspot_level)} Coords (x,y): {hs.get('coords_level', 'N/A')}\n")
+                f.write(f"  Level {hs.get('level', hotspot_level)} Size (w,h): {hs.get('size_level', 'N/A')}\n")
 
-            f.write(f"  Score (StarDist DAB+ & SMP+ Count): {stardist_dab_smp_count}\n")
-            f.write(f"  (StarDist Nuclei within SMP Mask): {stardist_smp_count}\n")
-            f.write(f"  (StarDist Total Predicted in Patch): {stardist_total}\n")
+                # --- Fetch results using the NEW keys ---
+                ki67_pos_count = hs.get('stardist_ki67_pos_count', 0)
+                total_filtered_count = hs.get('stardist_total_count_filtered', 0)
+                # Get the pre-calculated index (assuming it's stored 0-1)
+                proliferation_index_fraction = hs.get('stardist_proliferation_index', 0.0)
 
-            if isinstance(ki67_index, float):
-                f.write(f"  Ki67 Index (of cells in SMP Mask %): {ki67_index:.2f}%\n")
-            else:
-                f.write(f"  Ki67 Index (of cells in SMP Mask %): {ki67_index}\n")
+                # --- Write results using the NEW keys ---
+                f.write(f"  Score (Local DAB Ki67+ Count): {ki67_pos_count}\n")
+                f.write(f"  Total Filtered Nuclei: {total_filtered_count}\n")
 
-            initial_density = hs.get('density_score', 'N/A')
-            if initial_density != 'N/A' and isinstance(initial_density, (float, int)):
-                f.write(f"  (Initial Candidate Density Score): {initial_density:.4f}\n")
+                # Display the proliferation index as a percentage
+                try:
+                    # Ensure the index is float before formatting
+                    proliferation_index_percent = float(proliferation_index_fraction) * 100.0
+                    f.write(f"  Ki67 Proliferation Index (%): {proliferation_index_percent:.2f}%\n")
+                except (ValueError, TypeError):
+                     f.write(f"  Ki67 Proliferation Index (%): N/A\n")
 
-            f.write("-" * 10 + "\n")
 
-    logger.info(f"Hotspot details saved to: {results_file}")
+                # Keep optional initial density score if present
+                initial_density = hs.get('density_score', 'N/A')
+                if initial_density != 'N/A' and isinstance(initial_density, (float, int)):
+                    f.write(f"  (Initial Candidate Density Score): {initial_density:.4f}\n")
+
+                f.write("-" * 10 + "\n")
+
+        logger.info(f"Hotspot details (using local DAB counts) saved to: {results_file}")
+
+    except IOError as e:
+        logger.error(f"Error writing hotspot results file {results_file}: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error in write_hotspot_results: {e}", exc_info=True)
 
 
 

@@ -518,32 +518,43 @@ def process_slide_ki67(slide_path, output_dir, tumor_models, cell_models, stardi
                     candidate_hotspot=candidate,
                     stardist_model=stardist_model,
                     slide=slide,
-                    dab_plus_mask_l2=dab_plus_mask_l2,
-                    cell_mask_binary_l2=cell_mask_binary_l2,
                     hotspot_level=hotspot_level,
                     actual_pixel_size_um=actual_pixel_size_um,
                     debug_dir=refinement_debug_base_dir,
                     candidate_index=i
                 )
-                if updated_hotspot is not None:
-                    if 'stardist_dab_smp_cell_count' in updated_hotspot:
-                         refined_hotspots_results.append(updated_hotspot)
-                    else: logger.warning(f"Refinement for candidate {i} missing count results. Skipping.")
-                else: logger.warning(f"Refinement failed for candidate index {i}. Skipping.")
 
-            # --- Re-ranking based on refined counts ---
+                if updated_hotspot is not None:
+                    if 'stardist_ki67_pos_count' in updated_hotspot:
+                         refined_hotspots_results.append(updated_hotspot)
+                         logger.debug(f"Candidate {i} refined successfully with Ki67+ count: {updated_hotspot['stardist_ki67_pos_count']}")
+                    else:
+                        # Log if the expected key is missing after successful function return
+                        logger.warning(f"Refinement returned for candidate {i} but missing 'stardist_ki67_pos_count'. Skipping.")
+                else:
+                    # Log if the refinement function itself returned None (indicating failure)
+                    logger.warning(f"Refinement failed (returned None) for candidate index {i}. Skipping.")
+
+
+            # --- Re-ranking based on refined counts (using NEW keys) ---
             if refined_hotspots_results:
-                refined_hotspots_results.sort(key=lambda item: item.get('stardist_dab_smp_cell_count', 0), reverse=True)
-                hotspots = refined_hotspots_results[:hotspot_top_n]
-                logger.info(f"Re-ranked hotspots based on StarDist count (DAB+ & SMP+). Top {len(hotspots)}:")
+                # Sort using the NEW key
+                refined_hotspots_results.sort(key=lambda item: item.get('stardist_ki67_pos_count', 0), reverse=True)
+                hotspots = refined_hotspots_results[:hotspot_top_n] # Select top N based on new score
+
+                # Log using the NEW keys
+                logger.info(f"Re-ranked hotspots based on local DAB Ki67+ count. Top {len(hotspots)}:")
                 for rank, hs in enumerate(hotspots):
-                    logger.info(f"  Rank {rank+1}: Count={hs.get('stardist_dab_smp_cell_count','N/A')}, "
+                    logger.info(f"  Rank {rank+1}: Ki67+ Count={hs.get('stardist_ki67_pos_count','N/A')}, "
+                                f"Total Filtered={hs.get('stardist_total_count_filtered', 'N/A')}, "
+                                f"PI={hs.get('stardist_proliferation_index', 0.0):.2%}, " # Display PI
                                 f"L0 Coords={hs.get('coords_l0')}, "
                                 f"L{hs.get('level','?')} Coords={hs.get('coords_level')}, "
-                                f"Initial Density={hs.get('density_score', 'N/A'):.4f}, "
-                                f"SMP Cells in Area={hs.get('stardist_smp_cell_count', 'N/A')}")
-                    hs['final_score'] = hs.get('stardist_dab_smp_cell_count', 0)
-            else: logger.warning("No hotspots remained after refinement process.")
+                                f"Initial Density={hs.get('density_score', 'N/A'):.4f}")
+                    # Set final_score based on the NEW key
+                    hs['final_score'] = hs.get('stardist_ki67_pos_count', 0)
+            else:
+                logger.warning("No hotspots remained after refinement process.")
 
 
         # === 9. Generate Final Overlay (Level 2) ===
