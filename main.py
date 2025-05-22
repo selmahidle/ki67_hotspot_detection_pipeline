@@ -83,7 +83,7 @@ def write_hotspot_results(hotspot_results, output_dir, slide_path, hotspot_level
 
 if __name__ == "__main__":
 
-    default_output_base = "/cluster/home/selmahi/outputs_from_fixing_stardist"
+    default_output_base = "/cluster/home/selmahi/pipeline_outputs"
     timestamp = datetime.now().strftime("%d%m%Y%H%M")
     default_output_dir = os.path.join(default_output_base, timestamp)
 

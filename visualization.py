@@ -237,11 +237,11 @@ def generate_overlay(slide, overlay_level, hotspot_level,
         hotspot_colors=[(0,0,255),(0,255,255),(255,0,255),(255,255,0),(0,255,0)] # BGR: Red, Yellow, Magenta, Cyan, Green
         contour_thickness_tissue=max(1, int(overlay_w * 0.001)) # Relative thickness
         contour_thickness_tumor=max(1, int(overlay_w * 0.001))
-        hotspot_thickness=max(4, int(overlay_w * 0.003)) # Make hotspot border thicker
+        hotspot_thickness=max(2, int(overlay_w * 0.0015)) # Make hotspot border thicker
         dab_contour_thickness=max(1, int(overlay_w * 0.0005))
         font=cv2.FONT_HERSHEY_SIMPLEX
         font_scale=max(0.8, overlay_w / 10000.0) # Scale font with image width
-        label_thickness=max(1, int(font_scale * 1.5))
+        label_thickness=max(2, int(font_scale * 1.5))
 
 
         # --- Draw Elements ---
@@ -285,10 +285,19 @@ def generate_overlay(slide, overlay_level, hotspot_level,
         else: logger.info("Skipping DAB+ contours (mask empty or None).")
 
         # Hotspots
+        # Inside visualization.py -> generate_overlay function
+
+        # Hotspots
         if hotspots:
             logger.info(f"Drawing {len(hotspots)} hotspots...")
             scale_factor = slide.level_downsamples[overlay_level] / slide.level_downsamples[hotspot_level]
             logger.debug(f"Hotspot scaling factor L{hotspot_level}->L{overlay_level}: {scale_factor:.3f}")
+
+            # --- Parameters for Hotspot Labels (defined once) ---
+            hs_font_scale = font_scale * 1.8  # Use this for hotspot labels
+            hs_label_thickness = max(2, int(label_thickness * 1.5)) 
+            text_bg_alpha = 0.6 # Transparency for text background
+            text_padding = int(3 * hs_font_scale) # Padding around text for background box
 
             for i, hotspot in enumerate(hotspots):
                 hs_x_hl, hs_y_hl = hotspot['coords_level']
@@ -307,28 +316,54 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                 hs_y = min(max(0, hs_y), overlay_h - hs_h)
 
                 logger.debug(f" Hotspot {i+1}: L{overlay_level} Rect = ({hs_x},{hs_y}, {hs_w}x{hs_h})")
-                color = hotspot_colors[i % len(hotspot_colors)]
-                # Draw rectangle
+                color = hotspot_colors[i % len(hotspot_colors)] # Unique color for box
+                text_color = (255, 255, 255) # White text for good contrast
+                bg_color_text = (0,0,0) # Black background for text
+
                 cv2.rectangle(overlay_bgr, (hs_x, hs_y), (hs_x + hs_w, hs_y + hs_h), color, hotspot_thickness)
 
-                # Add label (Hotspot number and Final Score/Count)
-                score = hotspot.get('final_score', hotspot.get('density_score', -1)) # Use final score if avail
-                label_text = f"HS {i+1}: {score}" if isinstance(score, int) else f"HS {i+1}: {score:.3f}"
-                (text_w, text_h), _ = cv2.getTextSize(label_text, font, font_scale*1.5, label_thickness+1) # Slightly larger font for HS label
+                proliferation_index_value = hotspot.get('stardist_proliferation_index')
 
-                # Position label inside top-left corner
-                label_x = hs_x + hotspot_thickness + 5
-                label_y = hs_y + hotspot_thickness + text_h + 5
+                if proliferation_index_value is not None:
+                    # Assuming PI is stored as 0.0-1.0, convert to percentage for display
+                    label_text = f"HS{i+1}: {proliferation_index_value * 100.0:.1f}%"
+                else:
+                    label_text = f"HS{i+1}: PI N/A"
+                    logger.warning(f"PI key 'stardist_proliferation_index' not found in hotspot dict for HS {i+1}.")
 
-                # Ensure label stays within image bounds
-                label_x = min(label_x, overlay_w - text_w - 5)
-                label_y = min(label_y, overlay_h - 5)
-                label_x = max(label_x, 5)
-                label_y = max(label_y, text_h + 5)
+                (text_w, text_h), baseline = cv2.getTextSize(label_text, font, hs_font_scale, hs_label_thickness)
 
-                # Draw text with black outline for better visibility
-                cv2.putText(overlay_bgr, label_text, (label_x + 1, label_y + 1), font, font_scale*1.5, (0,0,0), label_thickness+1, cv2.LINE_AA)
-                cv2.putText(overlay_bgr, label_text, (label_x, label_y), font, font_scale*1.5, color, label_thickness, cv2.LINE_AA)
+                # --- Position Label (e.g., above the hotspot box) ---
+                # Calculate position for the background box
+                label_bg_y1 = hs_y - text_h - baseline - text_padding * 2 # Position above the box
+                label_bg_x1 = hs_x                                        # Align with left of hotspot box
+                label_bg_y2 = hs_y - baseline + text_padding           # Bottom of the background box
+                label_bg_x2 = hs_x + text_w + text_padding * 2         # Right of the background box
+                
+                # Adjust if label goes off screen (simple clipping for now)
+                label_bg_y1 = max(text_padding, label_bg_y1)
+                label_bg_x1 = max(text_padding, label_bg_x1)
+                label_bg_y2 = min(overlay_h - text_padding, label_bg_y1 + text_h + text_padding * 2) # Corrected bg height
+                label_bg_x2 = min(overlay_w - text_padding, label_bg_x1 + text_w + text_padding * 2)
+
+
+                # Calculate text position within this background box
+                text_x = label_bg_x1 + text_padding
+                text_y = label_bg_y1 + text_h + text_padding # Y position for putText (baseline)
+
+
+                # --- Draw Semi-Transparent Background for Text ---
+                if label_bg_x2 > label_bg_x1 and label_bg_y2 > label_bg_y1 : # Ensure valid rect
+                    sub_img = overlay_bgr[label_bg_y1 : label_bg_y2, label_bg_x1 : label_bg_x2]
+                    rect_bg = np.full(sub_img.shape, bg_color_text, dtype=np.uint8) # Black background
+                    
+                    # Blend the rectangle
+                    res = cv2.addWeighted(sub_img, 1 - text_bg_alpha, rect_bg, text_bg_alpha, 0)
+                    overlay_bgr[label_bg_y1 : label_bg_y2, label_bg_x1 : label_bg_x2] = res
+                
+                # --- Draw Text on top of the background ---
+                cv2.putText(overlay_bgr, label_text, (text_x, text_y), font, hs_font_scale, text_color, hs_label_thickness, cv2.LINE_AA)
+
         else: logger.info("No hotspots provided to draw.")
 
         # --- Add Legend --- #
