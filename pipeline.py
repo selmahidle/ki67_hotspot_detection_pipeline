@@ -434,16 +434,21 @@ def process_slide_ki67(slide_path, output_dir, tumor_models, cell_models, stardi
             if actual_pixel_size_um is None:
                 logger.error("Failed to determine actual pixel size. Skipping StarDist refinement."); return None
 
-            # --- Refine each candidate ---
             logger.info(f"Refining {len(candidate_hotspots)} initial candidates...")
             for i, candidate in enumerate(tqdm(candidate_hotspots, desc="Refining Hotspots")):
 
                 updated_hotspot = refine_hotspot_with_stardist(
-                    candidate_hotspot=candidate, stardist_model=stardist_model, slide=slide,
-                    hotspot_level=hotspot_level, actual_pixel_size_um=actual_pixel_size_um,
-                    dab_threshold=hotspot_dab_threshold, debug_dir=refinement_debug_base_dir,
-                    candidate_index=i
+                    candidate_hotspot=candidate,
+                    stardist_model=stardist_model,
+                    slide=slide,
+                    hotspot_level=hotspot_level,
+                    actual_pixel_size_um=actual_pixel_size_um,
+                    dab_threshold=hotspot_dab_threshold,
+                    debug_dir=refinement_debug_base_dir,
+                    candidate_index=i,
+                    tumor_cell_mask_l2=cell_mask_binary_l2  
                 )
+
 
                 if updated_hotspot is not None:
                     if all(k in updated_hotspot for k in ['stardist_ki67_pos_count', 'stardist_total_count_filtered', 'positive_centroids', 'all_centroids']):

@@ -88,9 +88,7 @@ if __name__ == "__main__":
     default_output_dir = os.path.join(default_output_base, timestamp)
 
     parser = argparse.ArgumentParser(description="Run Ki67 Hotspot Analysis on a WSI")
-    parser.add_argument("--slide_path", type=str,
-                        default="/cluster/home/selmahi/mib_pipeline/datasets/ndpi_tumor_segmentation/ndpi_files/wz8shzxklk6w.ndpi",
-                        help="Path to the input WSI file.")
+    parser.add_argument("--slide_path", type=str, help="Path to the input WSI file.")
     parser.add_argument("--output_dir", type=str, default=default_output_dir,
                         help="Directory to save output images and results.")
     parser.add_argument("--tumor_model_base_dir", type=str,
