@@ -22,8 +22,6 @@ logger = logging.getLogger(__name__)
 Image.MAX_IMAGE_PIXELS = None
 
 
-# Potentially in utils.py or directly in pipeline.py if not used elsewhere
-
 def calculate_iou(boxA, boxB):
     """
     Calculate Intersection over Union (IoU) between two bounding boxes.
@@ -477,142 +475,10 @@ def process_slide_ki67(slide_path, output_dir, tumor_models, cell_models, stardi
                         processed_hotspots.append(hs) # KEEP original
 
                     else: # total_cells_pass0 > max_cells
-                        logger.info(f"  Cand {candidate_id} (Ki67+ {ki67_count_pass0}): Above cell range ({total_cells_pass0} > {max_cells}), attempting Pass 1 sub-sampling ({sub_patch_size_l2_pass1}x{sub_patch_size_l2_pass1})...")
-
-                        # Retrieve centroids, check validity
-                        positive_centroids = hs.get('positive_centroids')
-                        all_centroids = hs.get('all_centroids')
-                        if not isinstance(positive_centroids, list) or not isinstance(all_centroids, list) or not all_centroids:
-                             logger.warning(f"  Cand {candidate_id}: Invalid/missing centroid data for Pass 1 sub-sampling. Discarding.")
-                             continue # DISCARD
-
-                        patch_h, patch_w = hs.get('size_level', (0,0))[::-1] # Original patch H, W
-                        if patch_h < sub_patch_size_l2_pass1 or patch_w < sub_patch_size_l2_pass1:
-                             logger.warning(f"  Cand {candidate_id}: Orig patch size ({patch_w}x{patch_h}) too small for Pass 1 ({sub_patch_size_l2_pass1}). Discarding.")
-                             continue # DISCARD
-
-                        # --- Pass 1 Sub-sampling ---
-                        best_sub_region_pass1 = {'pos_count': -1, 'total_count': -1, 'y_rel': -1, 'x_rel': -1}
-                        pos_centroids_np = np.array(positive_centroids) if positive_centroids else np.empty((0, 2))
-                        all_centroids_np = np.array(all_centroids)
-
-                        for y_rel1 in range(0, patch_h - sub_patch_size_l2_pass1 + 1, sub_stride):
-                            for x_rel1 in range(0, patch_w - sub_patch_size_l2_pass1 + 1, sub_stride):
-                                win_y_min1, win_y_max1 = y_rel1, y_rel1 + sub_patch_size_l2_pass1
-                                win_x_min1, win_x_max1 = x_rel1, x_rel1 + sub_patch_size_l2_pass1
-                                pos_count1 = 0
-                                if pos_centroids_np.shape[0] > 0:
-                                    pos_mask1 = (pos_centroids_np[:, 0] >= win_y_min1) & (pos_centroids_np[:, 0] < win_y_max1) & \
-                                                (pos_centroids_np[:, 1] >= win_x_min1) & (pos_centroids_np[:, 1] < win_x_max1)
-                                    pos_count1 = np.sum(pos_mask1)
-                                if pos_count1 > best_sub_region_pass1['pos_count']:
-                                    all_mask1 = (all_centroids_np[:, 0] >= win_y_min1) & (all_centroids_np[:, 0] < win_y_max1) & \
-                                                (all_centroids_np[:, 1] >= win_x_min1) & (all_centroids_np[:, 1] < win_x_max1)
-                                    total_count1 = np.sum(all_mask1)
-                                    best_sub_region_pass1 = {'pos_count': pos_count1, 'total_count': total_count1, 'y_rel': y_rel1, 'x_rel': x_rel1}
-
-                        # --- Check Pass 1 Results ---
-                        N1 = best_sub_region_pass1['total_count']
-                        Ki67_N1 = best_sub_region_pass1['pos_count']
-                        if Ki67_N1 < 0 : # Should only happen if loop didn't run or find any window
-                             logger.warning(f"  Cand {candidate_id}: Pass 1 sub-sampling failed to find any window. Discarding.")
-                             continue # DISCARD
-                        logger.info(f"    Pass 1 best sub-region ({sub_patch_size_l2_pass1}x{sub_patch_size_l2_pass1}): Ki67+={Ki67_N1}, Total={N1}")
-
-                        if N1 < min_cells:
-                            logger.info(f"    Pass 1 result discarded: Too few cells ({N1} < {min_cells})")
-                            continue # DISCARD
-
-                        elif min_cells <= N1 <= max_cells:
-                            logger.info(f"    Pass 1 result accepted: Cell count ({N1}) is within range.")
-                            # Create hotspot dict from Pass 1 results
-                            sub_hotspot = {}
-                            for key in ['slide_path', 'level', 'initial_density_score']:
-                                 if key in hs: sub_hotspot[key] = hs[key]
-                            orig_coords = hs.get('coords_level', (0,0))
-                            sub_hotspot['coords_level'] = (orig_coords[0] + best_sub_region_pass1['x_rel'], orig_coords[1] + best_sub_region_pass1['y_rel'])
-                            sub_hotspot['size_level'] = (sub_patch_size_l2_pass1, sub_patch_size_l2_pass1)
-                            downsample_l2 = slide.level_downsamples[hotspot_level]
-                            sub_hotspot['coords_l0'] = (int(sub_hotspot['coords_level'][0] * downsample_l2), int(sub_hotspot['coords_level'][1] * downsample_l2))
-                            sub_hotspot['size_l0'] = (int(sub_hotspot['size_level'][0] * downsample_l2), int(sub_hotspot['size_level'][1] * downsample_l2))
-                            sub_hotspot['stardist_ki67_pos_count'] = Ki67_N1
-                            sub_hotspot['stardist_total_count_filtered'] = N1
-                            sub_hotspot['stardist_proliferation_index'] = (Ki67_N1 / N1 if N1 > 0 else 0.0)
-                            sub_hotspot['is_subsampled'] = True
-                            sub_hotspot['subsample_pass'] = 1
-                            processed_hotspots.append(sub_hotspot) # KEEP Pass 1 Result
-                            continue # Go to next candidate
-
-                        else: # N1 > max_cells
-                             logger.info(f"    Pass 1 result ({N1} cells) still > {max_cells}. Attempting Pass 2 sub-sampling ({sub_patch_size_l2_pass2}x{sub_patch_size_l2_pass2})...")
-
-                             # --- Pass 2 Sub-sampling (within Pass 1 best region) ---
-                             best_sub_region_pass2 = {'pos_count': -1, 'total_count': -1, 'y_rel': -1, 'x_rel': -1}
-                             # Define bounds for Pass 2 search (relative to original 512 patch)
-                             pass1_y_start = best_sub_region_pass1['y_rel']
-                             pass1_x_start = best_sub_region_pass1['x_rel']
-                             pass1_h = sub_patch_size_l2_pass1
-                             pass1_w = sub_patch_size_l2_pass1
-
-                             if pass1_h < sub_patch_size_l2_pass2 or pass1_w < sub_patch_size_l2_pass2:
-                                  logger.warning(f"  Cand {candidate_id}: Pass 1 region ({pass1_w}x{pass1_h}) too small for Pass 2 ({sub_patch_size_l2_pass2}). Discarding.")
-                                  continue # DISCARD
-
-                             for y_rel2 in range(0, pass1_h - sub_patch_size_l2_pass2 + 1, sub_stride):
-                                 for x_rel2 in range(0, pass1_w - sub_patch_size_l2_pass2 + 1, sub_stride):
-                                     # Window coordinates relative to ORIGINAL 512 patch
-                                     win_y_min2 = pass1_y_start + y_rel2
-                                     win_y_max2 = win_y_min2 + sub_patch_size_l2_pass2
-                                     win_x_min2 = pass1_x_start + x_rel2
-                                     win_x_max2 = win_x_min2 + sub_patch_size_l2_pass2
-
-                                     pos_count2 = 0
-                                     if pos_centroids_np.shape[0] > 0:
-                                          pos_mask2 = (pos_centroids_np[:, 0] >= win_y_min2) & (pos_centroids_np[:, 0] < win_y_max2) & \
-                                                      (pos_centroids_np[:, 1] >= win_x_min2) & (pos_centroids_np[:, 1] < win_x_max2)
-                                          pos_count2 = np.sum(pos_mask2)
-
-                                     if pos_count2 > best_sub_region_pass2['pos_count']:
-                                          all_mask2 = (all_centroids_np[:, 0] >= win_y_min2) & (all_centroids_np[:, 0] < win_y_max2) & \
-                                                      (all_centroids_np[:, 1] >= win_x_min2) & (all_centroids_np[:, 1] < win_x_max2)
-                                          total_count2 = np.sum(all_mask2)
-                                          best_sub_region_pass2 = {'pos_count': pos_count2, 'total_count': total_count2,
-                                                                   'y_rel': y_rel2, # Relative to Pass 1 window start
-                                                                   'x_rel': x_rel2} # Relative to Pass 1 window start
-
-                             # --- Check Pass 2 Results ---
-                             N2 = best_sub_region_pass2['total_count']
-                             Ki67_N2 = best_sub_region_pass2['pos_count']
-                             if Ki67_N2 < 0:
-                                  logger.warning(f"  Cand {candidate_id}: Pass 2 sub-sampling failed to find any window. Discarding.")
-                                  continue # DISCARD
-                             logger.info(f"    Pass 2 best sub-region ({sub_patch_size_l2_pass2}x{sub_patch_size_l2_pass2}): Ki67+={Ki67_N2}, Total={N2}")
-
-                             if N2 < min_cells or N2 > max_cells:
-                                  logger.info(f"    Pass 2 result discarded: Cell count ({N2}) outside range [{min_cells}-{max_cells}]")
-                                  continue # DISCARD
-                             else: # min_cells <= N2 <= max_cells
-                                  logger.info(f"    Pass 2 result accepted: Cell count ({N2}) is within range.")
-                                  # Create hotspot dict from Pass 2 results
-                                  sub_hotspot = {}
-                                  for key in ['slide_path', 'level', 'initial_density_score']:
-                                      if key in hs: sub_hotspot[key] = hs[key]
-                                  orig_coords = hs.get('coords_level', (0,0))
-                                  # Final coords = original + pass1_offset + pass2_offset
-                                  final_x = orig_coords[0] + best_sub_region_pass1['x_rel'] + best_sub_region_pass2['x_rel']
-                                  final_y = orig_coords[1] + best_sub_region_pass1['y_rel'] + best_sub_region_pass2['y_rel']
-                                  sub_hotspot['coords_level'] = (final_x, final_y)
-                                  sub_hotspot['size_level'] = (sub_patch_size_l2_pass2, sub_patch_size_l2_pass2) # Use Pass 2 size
-                                  downsample_l2 = slide.level_downsamples[hotspot_level]
-                                  sub_hotspot['coords_l0'] = (int(sub_hotspot['coords_level'][0] * downsample_l2), int(sub_hotspot['coords_level'][1] * downsample_l2))
-                                  sub_hotspot['size_l0'] = (int(sub_hotspot['size_level'][0] * downsample_l2), int(sub_hotspot['size_level'][1] * downsample_l2))
-                                  sub_hotspot['stardist_ki67_pos_count'] = Ki67_N2
-                                  sub_hotspot['stardist_total_count_filtered'] = N2
-                                  sub_hotspot['stardist_proliferation_index'] = (Ki67_N2 / N2 if N2 > 0 else 0.0)
-                                  sub_hotspot['is_subsampled'] = True
-                                  sub_hotspot['subsample_pass'] = 2
-                                  processed_hotspots.append(sub_hotspot) # KEEP Pass 2 Result
-                                  continue # Go to next candidate
+                        # If refine_hotspot_with_stardist is considered sufficient,
+                        # we discard hotspots that are still too dense after its best effort.
+                        logger.info(f"  Cand {candidate_id} (Ki67+ {ki67_count_pass0}): Discarding - Too many cells ({total_cells_pass0} > {max_cells}) even after FoV refinement.")
+                        continue # DISCARD
 
             # --- Final Ranking of processed_hotspots ---
             if processed_hotspots:
@@ -669,7 +535,6 @@ def process_slide_ki67(slide_path, output_dir, tumor_models, cell_models, stardi
         return hotspots
 
     # --- Error Handling & Cleanup ---
-    # ... (Error handling and finally block - unchanged) ...
     except openslide.OpenSlideError as e: logger.error(f"OpenSlide error: {e}", exc_info=True); return None
     except FileNotFoundError as e: logger.error(f"File not found: {e}", exc_info=True); return None
     except MemoryError as e: logger.error(f"MemoryError: {e}", exc_info=True); raise e; return None
