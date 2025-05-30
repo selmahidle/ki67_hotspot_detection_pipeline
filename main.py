@@ -19,24 +19,20 @@ def write_hotspot_results(hotspot_results, output_dir, slide_path, hotspot_level
     Writes the hotspot analysis results to a text file, using counts derived
     from local DAB classification per nucleus.
     """
-    logger = logging.getLogger(__name__) # Get logger inside function if not passed
+    logger = logging.getLogger(__name__) 
 
-    # Check if hotspot_results is empty or None
     if not hotspot_results:
         logger.warning("No hotspot results provided to write_hotspot_results. Skipping file creation.")
         return
 
-    results_file = os.path.join(output_dir, Path(slide_path).stem + "_hotspots_stardist_localDAB.txt") # Added suffix
+    results_file = os.path.join(output_dir, Path(slide_path).stem + "_hotspots_stardist_localDAB.txt") 
     try:
         with open(results_file, 'w') as f:
             f.write(f"Slide: {Path(slide_path).name}\n")
-            # Filter results to only include those that potentially have the new keys
             valid_results = [hs for hs in hotspot_results if isinstance(hs, dict)]
             f.write(f"Processed {len(valid_results)} candidate hotspots (ranked by local DAB Ki67+ count).\n")
             f.write("-" * 30 + "\n")
 
-            # Sort results by the new Ki67+ count before writing (optional, but good practice)
-            # Use .get with a default of 0 to handle cases where a candidate might have failed refinement
             valid_results.sort(key=lambda hs: hs.get('stardist_ki67_pos_count', 0), reverse=True)
 
             for i, hs in enumerate(valid_results):
@@ -46,26 +42,18 @@ def write_hotspot_results(hotspot_results, output_dir, slide_path, hotspot_level
                 f.write(f"  Level {hs.get('level', hotspot_level)} Coords (x,y): {hs.get('coords_level', 'N/A')}\n")
                 f.write(f"  Level {hs.get('level', hotspot_level)} Size (w,h): {hs.get('size_level', 'N/A')}\n")
 
-                # --- Fetch results using the NEW keys ---
                 ki67_pos_count = hs.get('stardist_ki67_pos_count', 0)
                 total_filtered_count = hs.get('stardist_total_count_filtered', 0)
-                # Get the pre-calculated index (assuming it's stored 0-1)
                 proliferation_index_fraction = hs.get('stardist_proliferation_index', 0.0)
 
-                # --- Write results using the NEW keys ---
                 f.write(f"  Score (Local DAB Ki67+ Count): {ki67_pos_count}\n")
                 f.write(f"  Total Filtered Nuclei: {total_filtered_count}\n")
 
-                # Display the proliferation index as a percentage
                 try:
-                    # Ensure the index is float before formatting
                     proliferation_index_percent = float(proliferation_index_fraction) * 100.0
                     f.write(f"  Ki67 Proliferation Index (%): {proliferation_index_percent:.2f}%\n")
                 except (ValueError, TypeError):
                      f.write(f"  Ki67 Proliferation Index (%): N/A\n")
-
-
-                # Keep optional initial density score if present
                 initial_density = hs.get('density_score', 'N/A')
                 if initial_density != 'N/A' and isinstance(initial_density, (float, int)):
                     f.write(f"  (Initial Candidate Density Score): {initial_density:.4f}\n")
@@ -118,7 +106,6 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
 
-    # --- Load Models ---
     logger.info("Loading Models...")
     tumor_models = load_models_from_subdirs(args.tumor_model_base_dir, args.model_type, args.encoder, device, apply_groupnorm=True)
     cell_models = load_models_from_subdirs(args.cell_model_base_dir, args.model_type, args.encoder, device, apply_groupnorm=False)
@@ -133,9 +120,8 @@ if __name__ == "__main__":
 
     logger.info(f"Loaded {len(tumor_models)} tumor models and {len(cell_models)} cell models.")
 
-    model = StarDist2D.from_pretrained('2D_versatile_he')
+    model = StarDist2D.from_pretrained('2D_versatile_fluo')
 
-    # --- Process Slide ---
     logger.info(f"Starting Ki67 hotspot analysis for: {args.slide_path}")
     hotspot_results = process_slide_ki67(
         slide_path=args.slide_path,
