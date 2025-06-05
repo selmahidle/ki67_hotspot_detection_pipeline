@@ -5,8 +5,13 @@ import argparse
 from pathlib import Path
 import torch
 from PIL import Image
-from model_utils import create_model, load_latest_checkpoint, load_models_from_subdirs
-from pipeline import process_slide_ki67 
+from model_utils import (
+    create_model,
+    load_latest_checkpoint,
+    load_models_from_subdirs,
+    create_and_load_attention_unet # <--- IMPORT THIS
+)
+from pipeline import process_slide_ki67
 from datetime import datetime
 from stardist.models import StarDist2D
 
@@ -19,13 +24,13 @@ def write_hotspot_results(hotspot_results, output_dir, slide_path, hotspot_level
     Writes the hotspot analysis results to a text file, using counts derived
     from local DAB classification per nucleus.
     """
-    logger = logging.getLogger(__name__) 
+    logger = logging.getLogger(__name__)
 
     if not hotspot_results:
         logger.warning("No hotspot results provided to write_hotspot_results. Skipping file creation.")
         return
 
-    results_file = os.path.join(output_dir, Path(slide_path).stem + "_hotspots_stardist_localDAB.txt") 
+    results_file = os.path.join(output_dir, Path(slide_path).stem + "_hotspots_stardist_localDAB.txt")
     try:
         with open(results_file, 'w') as f:
             f.write(f"Slide: {Path(slide_path).name}\n")
@@ -76,22 +81,13 @@ if __name__ == "__main__":
     default_output_dir = os.path.join(default_output_base, timestamp)
 
     parser = argparse.ArgumentParser(description="Run Ki67 Hotspot Analysis on a WSI")
-    parser.add_argument("--slide_path", type=str, help="Path to the input WSI file.")
-    parser.add_argument("--output_dir", type=str, default=default_output_dir,
-                        help="Directory to save output images and results.")
-    parser.add_argument("--tumor_model_base_dir", type=str,
-                        default="/cluster/home/selmahi/mib_pipeline/mib_pipeline_scripts/checkpoints/tumor_segmentation_checkpoints",
-                        help="Base directory containing subfolders for each tumor segmentation model checkpoint.")
-    parser.add_argument("--cell_model_base_dir", type=str,
-                        default="/cluster/home/selmahi/mib_pipeline/mib_pipeline_scripts/checkpoints/cell_segmentation_checkpoints",
-                        help="Base directory containing subfolders for each cell segmentation model checkpoint.")
-    parser.add_argument("--model_type", type=str, default="DeepLabV3Plus",
-                        help="Segmentation model type (e.g., DeepLabV3Plus, Unet).")
-    parser.add_argument("--encoder", type=str, default="resnet18",
-                        help="Encoder backbone for the segmentation models.")
-
+    parser.add_argument("--slide_path", type=str, required=True, help="Path to the input WSI file.") 
+    parser.add_argument("--output_dir", type=str, default=default_output_dir, help="Directory to save output images and results.")
+    parser.add_argument("--tumor_model_base_dir", type=str, default="/cluster/home/selmahi/mib_pipeline/mib_pipeline_scripts/checkpoints/tumor_segmentation_checkpoints", help="Base directory containing subfolders for each tumor segmentation model checkpoint.")
+    parser.add_argument("--attention_unet_path", type=str, required=True, help="Path to the trained AttentionUNet .pth file for cell segmentation.") # <--- ADD
+    parser.add_argument("--model_type", type=str, default="DeepLabV3Plus", help="Segmentation model type for TUMOR models (e.g., DeepLabV3Plus, Unet).") 
+    parser.add_argument("--encoder", type=str, default="resnet18", help="Encoder backbone for TUMOR segmentation models.")
     args = parser.parse_args()
-
     os.makedirs(args.output_dir, exist_ok=True)
 
     log_file = os.path.join(args.output_dir, "pipeline.log")
@@ -108,27 +104,31 @@ if __name__ == "__main__":
 
     logger.info("Loading Models...")
     tumor_models = load_models_from_subdirs(args.tumor_model_base_dir, args.model_type, args.encoder, device, apply_groupnorm=True)
-    cell_models = load_models_from_subdirs(args.cell_model_base_dir, args.model_type, args.encoder, device, apply_groupnorm=False)
+
+    logger.info(f"Loading AttentionUNet cell model using checkpoint: {args.attention_unet_path}")
+    cell_model_attention_unet = create_and_load_attention_unet(
+        checkpoint_path=args.attention_unet_path,
+        device=device
+    )
 
     if not tumor_models:
         logger.error("No tumor models loaded. Exiting.")
         exit()
 
-    if not cell_models:
-        logger.error("No cell models loaded. Exiting.")
+    if cell_model_attention_unet is None:
+        logger.error("AttentionUNet cell model could not be loaded. Exiting.")
         exit()
 
-    logger.info(f"Loaded {len(tumor_models)} tumor models and {len(cell_models)} cell models.")
+    logger.info(f"Loaded {len(tumor_models)} tumor models and 1 AttentionUNet cell model.")
 
-    model = StarDist2D.from_pretrained('2D_versatile_fluo')
-
+    stardist_model_instance = StarDist2D.from_pretrained('2D_versatile_fluo')
     logger.info(f"Starting Ki67 hotspot analysis for: {args.slide_path}")
     hotspot_results = process_slide_ki67(
         slide_path=args.slide_path,
         output_dir=args.output_dir,
         tumor_models=tumor_models,
-        cell_models=cell_models,
-        stardist_model=model,
+        cell_model=cell_model_attention_unet,
+        stardist_model=stardist_model_instance, 
         device=device
     )
 
