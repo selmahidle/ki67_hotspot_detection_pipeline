@@ -7,7 +7,8 @@ import pickle
 import torch
 import torch.nn as nn
 import segmentation_models_pytorch as smp
-from utils import convert_batchnorm_to_groupnorm 
+from monai.networks.nets import AttentionUnet
+from utils import convert_batchnorm_to_groupnorm
 
 
 logger = logging.getLogger(__name__)
@@ -19,42 +20,115 @@ def load_models_from_subdirs(base_dir, model_type, encoder, device, apply_groupn
         model = create_model(model_type, encoder, None, num_classes=2, activation='sigmoid')
         if apply_groupnorm:
             model = convert_batchnorm_to_groupnorm(model)
-        model.to(device)
         model = load_latest_checkpoint(model, subdir, device)
         if model is not None:
-            model.to(device)
+            model.to(device) 
             model_list.append(model)
     return model_list
-    
+
+
+import segmentation_models_pytorch as smp
+import logging
+
+# It's good practice to define the logger at the module level
+logger = logging.getLogger(__name__)
 
 def create_model(model_type, encoder, encoder_weights, num_classes, activation):
     """
     Creates a segmentation model using the segmentation-models-pytorch library.
+
+    Args:
+        model_type (str): The type of the model (e.g., "Unet", "DeepLabV3Plus").
+        encoder (str): The name of the encoder (e.g., "resnet18").
+        encoder_weights (str or None): Pre-trained weights for the encoder (e.g., "imagenet", None).
+        num_classes (int): The number of output classes.
+        activation (str or callable or None): Activation function for the output layer.
+                                            For binary segmentation with logits output (e.g. for BCEWithLogitsLoss),
+                                            this should be None. For multi-class, could be "softmax".
+
+    Returns:
+        torch.nn.Module: The created segmentation model.
+
+    Raises:
+        ValueError: If an invalid model_type is specified.
+        Exception: If model creation fails for other reasons.
     """
     model_class = getattr(smp, model_type, None)
     if model_class is None:
+        logger.error(f"Invalid model type specified: {model_type}. Not found in segmentation_models_pytorch.")
         raise ValueError(f"Invalid model type specified: {model_type}. Not found in segmentation_models_pytorch.")
 
-    logger.info(f"Creating model: {model_type} with encoder: {encoder}, classes: {num_classes}, activation: {activation}")
+    logger.info(f"Attempting to create model: {model_type} with encoder: {encoder}, "
+                f"encoder_weights: {encoder_weights}, classes: {num_classes}, activation: {activation}")
 
     try:
         model_params = {
-            'encoder_name': encoder, 'encoder_weights': encoder_weights,
-            'in_channels': 3, 'classes': num_classes, 'activation': activation,
+            'encoder_name': encoder,
+            'encoder_weights': encoder_weights,
+            'in_channels': 3, 
+            'classes': num_classes,
+            'activation': activation,
         }
+
         if model_type == "DeepLabV3Plus":
-             model_params['encoder_output_stride'] = 16
-             model_params['decoder_atrous_rates'] = (12, 24, 36)
-             logger.info("Applying DeepLabV3Plus specific parameters: encoder_output_stride=16, decoder_atrous_rates=(12, 24, 36)")
+            model_params['encoder_output_stride'] = 16
+            model_params['decoder_atrous_rates'] = (12, 24, 36)
+            logger.info(f"Setting DeepLabV3Plus specific parameters: "
+                        f"encoder_output_stride={model_params['encoder_output_stride']}, "
+                        f"decoder_atrous_rates={model_params['decoder_atrous_rates']}")
+
         model = model_class(**model_params)
-        logger.info(f"Successfully created model: {model_type} with encoder {encoder}")
+        logger.info(f"Successfully created model: {model_type} with encoder: {encoder}, "
+                    f"classes: {num_classes}, activation: {activation}.")
         return model
     except Exception as e:
         logger.error(f"Error creating model {model_type} with encoder {encoder}: {e}", exc_info=True)
         raise
 
 
-def load_model_checkpoint(model, checkpoint_path, device, *, weights_only=True): # Added weights_only arg with default True
+def create_and_load_attention_unet(checkpoint_path, device, weights_only_load=True):
+    """
+    Creates an AttentionUNet model with predefined architecture, loads weights
+    from a checkpoint, and sets it to evaluation mode.
+
+    Args:
+        checkpoint_path (str): Path to the .pth checkpoint file.
+        device (torch.device): Device to load the model and checkpoint onto.
+        weights_only_load (bool): Passed to torch.load's weights_only argument for load_model_checkpoint.
+
+    Returns:
+        torch.nn.Module: The loaded AttentionUNet model, or None on failure.
+    """
+    logger.info(f"Creating MONAI AttentionUNet for cell segmentation.")
+    try:
+        model = AttentionUnet(
+            spatial_dims=2,
+            in_channels=3,
+            out_channels=1,
+            channels=(32, 64, 128, 256, 512),
+            strides=(2, 2, 2, 2),
+            kernel_size=3,
+            up_kernel_size=3
+        ).to(device)
+
+        logger.info(f"Loading AttentionUNet checkpoint from: {checkpoint_path}")
+
+        model = load_model_checkpoint(model, checkpoint_path, device, weights_only=weights_only_load)
+        
+        if model is not None:
+            model.eval()
+            logger.info("Successfully created and loaded AttentionUNet model.")
+            return model
+        else:
+            logger.error("Failed to load checkpoint into AttentionUNet model.")
+            return None
+
+    except Exception as e:
+        logger.error(f"Error creating or loading AttentionUNet model: {e}", exc_info=True)
+        return None
+
+
+def load_model_checkpoint(model, checkpoint_path, device, *, weights_only=True):
     """
     Loads a model state dictionary from a .pth checkpoint file.
 
@@ -75,18 +149,15 @@ def load_model_checkpoint(model, checkpoint_path, device, *, weights_only=True):
 
     logger.info(f"Loading checkpoint from: {checkpoint_path} onto device: {device}")
     try:
-        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=weights_only) 
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=weights_only)
 
-        # --- Extract state_dict ---
         state_dict = None
         if isinstance(checkpoint, dict):
-            # --- Simplified state_dict extraction ---
             state_dict = checkpoint.get("model_state_dict", checkpoint.get("state_dict", checkpoint))
-            if state_dict is checkpoint: # Check if get() returned the checkpoint itself (i.e., keys not found)
+            if state_dict is checkpoint:
                  logger.warning("Checkpoint dict lacks 'model_state_dict' or 'state_dict'. Assuming dict IS the state_dict.")
             elif state_dict is not None:
                  logger.debug(f"Loaded state_dict from key '{'model_state_dict' if 'model_state_dict' in checkpoint else 'state_dict'}'.")
-            # --------------------------------------
         elif isinstance(checkpoint, nn.Module):
              logger.warning("Checkpoint is full nn.Module object. Extracting state_dict.")
              state_dict = checkpoint.state_dict()
@@ -98,7 +169,6 @@ def load_model_checkpoint(model, checkpoint_path, device, *, weights_only=True):
              logger.error(f"Could not extract a valid state dictionary from checkpoint: {checkpoint_path}")
              raise ValueError("Invalid checkpoint format: Cannot extract state_dict.")
 
-        # --- Clean state_dict keys ---
         cleaned_state_dict = {}
         is_data_parallel = isinstance(model, nn.DataParallel)
         logger.debug(f"Model is DataParallel: {is_data_parallel}")
@@ -107,25 +177,18 @@ def load_model_checkpoint(model, checkpoint_path, device, *, weights_only=True):
             new_key = k
             if k.startswith('module.') and not is_data_parallel:
                 new_key = k[len('module.'):]
-                # logger.log(logging.DEBUG - 1, f"Removed 'module.' prefix: {k} -> {new_key}")
             elif not k.startswith('module.') and is_data_parallel:
                 new_key = 'module.' + k
-                # logger.log(logging.DEBUG - 1, f"Added 'module.' prefix: {k} -> {new_key}")
 
             if new_key.startswith('encoder.model.'):
-                # old_key_debug = new_key
                 new_key = 'encoder.' + new_key[len('encoder.model.'):]
-                # logger.log(logging.DEBUG - 1, f"Adjusted 'encoder.model.' prefix: {old_key_debug} -> {new_key}")
 
             cleaned_state_dict[new_key] = v.float() if isinstance(v, torch.Tensor) else v
-
-        # --- Load state_dict into model ---
+        
         model.float()
         try:
-            # Use new assignment API for load_state_dict in recent PyTorch versions
             load_info = model.load_state_dict(cleaned_state_dict, strict=True)
             strict_success = True
-            # Check returned info object for issues
             if hasattr(load_info, 'missing_keys') and load_info.missing_keys:
                  logger.warning(f"Strict loading reported missing keys: {load_info.missing_keys}")
                  strict_success = False
@@ -136,14 +199,13 @@ def load_model_checkpoint(model, checkpoint_path, device, *, weights_only=True):
             if strict_success:
                  logger.info(f"Loaded checkpoint '{Path(checkpoint_path).name}' successfully (strict).")
             else:
-                 # If strict loading finished but reported issues, still try non-strict for better logging maybe
                  logger.warning("Strict loading had issues. Attempting non-strict loading for more info...")
                  load_info_nonstrict = model.load_state_dict(cleaned_state_dict, strict=False)
                  logger.info(f"Loaded checkpoint '{Path(checkpoint_path).name}' successfully (non-strict).")
                  if load_info_nonstrict.missing_keys: logger.warning(f"  Non-strict - Missing: {load_info_nonstrict.missing_keys}")
                  if load_info_nonstrict.unexpected_keys: logger.warning(f"  Non-strict - Unexpected: {load_info_nonstrict.unexpected_keys}")
 
-        except RuntimeError as e: # Catch errors during strict loading attempt
+        except RuntimeError as e:
              logger.warning(f"Strict loading failed for {Path(checkpoint_path).name}: {e}. Attempting non-strict loading.")
              try:
                  load_info_nonstrict = model.load_state_dict(cleaned_state_dict, strict=False)
@@ -152,16 +214,17 @@ def load_model_checkpoint(model, checkpoint_path, device, *, weights_only=True):
                  if load_info_nonstrict.unexpected_keys: logger.warning(f"  Non-strict - Unexpected: {load_info_nonstrict.unexpected_keys}")
              except Exception as e_nonstrict:
                   logger.error(f"Non-strict loading also failed for {Path(checkpoint_path).name}: {e_nonstrict}", exc_info=True)
-                  raise e_nonstrict # Re-raise the non-strict error
+                  raise e_nonstrict
 
         model.to(device)
         logger.debug(f"Model placed on device {device} after loading checkpoint.")
         return model
 
     except FileNotFoundError: raise
-    except pickle.UnpicklingError as pe: # Catch the specific error # IMPORT pickle needed
-         logger.error(f"UnpicklingError loading checkpoint {checkpoint_path} (likely weights_only issue): {pe}", exc_info=True)
-         raise pe # Re-raise after logging
+    except pickle.UnpicklingError as pe:
+         logger.error(f"UnpicklingError loading checkpoint {checkpoint_path} (likely weights_only issue or corrupted file): {pe}", exc_info=True)
+         logger.info("If this error persists and the checkpoint source is trusted, try loading with weights_only=False.")
+         raise pe
     except Exception as e:
         logger.error(f"Error loading checkpoint {checkpoint_path}: {e}", exc_info=True)
         raise
@@ -185,26 +248,11 @@ def load_latest_checkpoint(model, checkpoint_dir, device):
         logger.error(f"Error finding latest checkpoint in {checkpoint_dir}: {e}")
         return None
 
-    # --- Determine if weights_only=False should be used --- # MODIFIED SECTION
-    # Use os.path.normpath to handle potential extra slashes
-    # Use os.path.basename to get the final directory component
-    # Use lower() for case-insensitive comparison (safer)
     norm_dir = os.path.normpath(checkpoint_dir)
     base_dir_name = os.path.basename(norm_dir)
-    # --- More robust check ---
-    use_weights_only_false = "model1_fra_henrik" in base_dir_name.lower() # Check lowercase
-
-    # --- Determine final flag and add Debug Prints ---
+    use_weights_only_false = "model1_fra_henrik" in base_dir_name.lower()
     final_weights_only_flag = not use_weights_only_false
-    logger.debug(f"Checkpoint Dir: {checkpoint_dir}, Base: {base_dir_name}, Use weights_only=False Flag: {use_weights_only_false}, Final weights_only value: {final_weights_only_flag}") # Use logger instead
-    # ------------------------------------------------------
+    logger.debug(f"Checkpoint Dir: {checkpoint_dir}, Base: {base_dir_name}, Use weights_only=False Flag: {use_weights_only_false}, Final weights_only value: {final_weights_only_flag}")
 
-    try:
-        # --- Pass the correctly determined weights_only flag ---
-        model = load_model_checkpoint(model, latest_checkpoint, device, weights_only=final_weights_only_flag) # PASS ARGUMENT
-        # -------------------------------------------------------
-        return model
-    except Exception as e:
-        logger.error(f"Failed to load latest checkpoint from {latest_checkpoint}.")
-        # The specific error was already logged in load_model_checkpoint
-        return None
+    model = load_model_checkpoint(model, latest_checkpoint, device, weights_only=final_weights_only_flag)
+    return model

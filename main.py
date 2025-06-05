@@ -7,9 +7,10 @@ import torch
 from PIL import Image
 from model_utils import (
     create_model,
-    load_latest_checkpoint,
-    load_models_from_subdirs,
-    create_and_load_attention_unet # <--- IMPORT THIS
+    # load_latest_checkpoint, # Not directly used for single model loading here
+    # load_models_from_subdirs, # Not used for tumor model anymore
+    create_and_load_attention_unet,
+    load_model_checkpoint # <-- IMPORT THIS for loading the tumor model
 )
 from pipeline import process_slide_ki67
 from datetime import datetime
@@ -81,12 +82,13 @@ if __name__ == "__main__":
     default_output_dir = os.path.join(default_output_base, timestamp)
 
     parser = argparse.ArgumentParser(description="Run Ki67 Hotspot Analysis on a WSI")
-    parser.add_argument("--slide_path", type=str, required=True, help="Path to the input WSI file.") 
+    parser.add_argument("--slide_path", type=str, required=True, help="Path to the input WSI file.")
     parser.add_argument("--output_dir", type=str, default=default_output_dir, help="Directory to save output images and results.")
-    parser.add_argument("--tumor_model_base_dir", type=str, default="/cluster/home/selmahi/mib_pipeline/mib_pipeline_scripts/checkpoints/tumor_segmentation_checkpoints", help="Base directory containing subfolders for each tumor segmentation model checkpoint.")
-    parser.add_argument("--attention_unet_path", type=str, required=True, help="Path to the trained AttentionUNet .pth file for cell segmentation.") # <--- ADD
-    parser.add_argument("--model_type", type=str, default="DeepLabV3Plus", help="Segmentation model type for TUMOR models (e.g., DeepLabV3Plus, Unet).") 
-    parser.add_argument("--encoder", type=str, default="resnet18", help="Encoder backbone for TUMOR segmentation models.")
+    parser.add_argument("--tumor_model_path", type=str, required=True, help="Path to the trained tumor segmentation model (.pth file).")
+    parser.add_argument("--tumor_model_type", type=str, default="DeepLabV3Plus", help="Tumor segmentation model type (e.g., DeepLabV3Plus, Unet).")
+    parser.add_argument("--tumor_encoder", type=str, default="resnet18", help="Encoder backbone for the tumor segmentation model.")
+    parser.add_argument("--attention_unet_path", type=str, required=True, help="Path to the trained AttentionUNet .pth file for cell segmentation.")
+
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -103,7 +105,27 @@ if __name__ == "__main__":
     logger.info(f"Using device: {device}")
 
     logger.info("Loading Models...")
-    tumor_models = load_models_from_subdirs(args.tumor_model_base_dir, args.model_type, args.encoder, device, apply_groupnorm=True)
+    logger.info(f"Creating tumor model ({args.tumor_model_type} with {args.tumor_encoder} encoder)...")
+    tumor_model = create_model(
+        model_type=args.tumor_model_type,
+        encoder=args.tumor_encoder,
+        encoder_weights=None, 
+        num_classes=1,        
+        activation=None     
+    )
+    if tumor_model is None:
+        logger.error("Failed to create tumor model structure. Exiting.")
+        exit()
+
+    logger.info(f"Loading tumor model checkpoint from: {args.tumor_model_path}")
+    try:
+        tumor_model = load_model_checkpoint(tumor_model, args.tumor_model_path, device, weights_only=True)
+        tumor_model.eval()
+        tumor_model.to(device)
+        logger.info("Tumor model loaded successfully.")
+    except Exception as e:
+        logger.error(f"Failed to load tumor model checkpoint: {e}", exc_info=True)
+        exit()
 
     logger.info(f"Loading AttentionUNet cell model using checkpoint: {args.attention_unet_path}")
     cell_model_attention_unet = create_and_load_attention_unet(
@@ -111,24 +133,21 @@ if __name__ == "__main__":
         device=device
     )
 
-    if not tumor_models:
-        logger.error("No tumor models loaded. Exiting.")
-        exit()
-
     if cell_model_attention_unet is None:
         logger.error("AttentionUNet cell model could not be loaded. Exiting.")
         exit()
 
-    logger.info(f"Loaded {len(tumor_models)} tumor models and 1 AttentionUNet cell model.")
+    logger.info(f"Loaded 1 {args.tumor_model_type} ({args.tumor_encoder}) tumor model and 1 AttentionUNet cell model.")
 
     stardist_model_instance = StarDist2D.from_pretrained('2D_versatile_fluo')
+
     logger.info(f"Starting Ki67 hotspot analysis for: {args.slide_path}")
     hotspot_results = process_slide_ki67(
         slide_path=args.slide_path,
         output_dir=args.output_dir,
-        tumor_models=tumor_models,
+        tumor_model=tumor_model, 
         cell_model=cell_model_attention_unet,
-        stardist_model=stardist_model_instance, 
+        stardist_model=stardist_model_instance,
         device=device
     )
 
@@ -137,6 +156,5 @@ if __name__ == "__main__":
         write_hotspot_results(hotspot_results, args.output_dir, args.slide_path)
     else:
         logger.error(f"Analysis failed for slide: {args.slide_path}")
-
 
     logger.info("Script finished.")
