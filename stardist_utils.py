@@ -555,8 +555,8 @@ def refine_hotspot_with_stardist(
             current_target_size_w *= (1 - resize_factor)
             current_target_size_h *= (1 - resize_factor)
 
-        current_target_size_w = np.clip(current_target_size_w, 64, 4096) # Clip target FoV size
-        current_target_size_h = np.clip(current_target_size_h, 64, 4096)
+        current_target_size_w = np.clip(current_target_size_w, 64, 32768)
+        current_target_size_h = np.clip(current_target_size_h, 64, 32768)
 
         iteration += 1
         if iteration == max_iterations:
