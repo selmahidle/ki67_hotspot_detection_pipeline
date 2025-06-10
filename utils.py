@@ -32,7 +32,7 @@ def get_actual_pixel_size_um(slide: openslide.OpenSlide, level: int, fallback_va
 
     mpp_x = None
     mpp_y = None
-    mpp_l0 = None # Store determined Level 0 MPP
+    mpp_l0 = None 
 
     try:
         mpp_x_str = slide.properties.get(openslide.PROPERTY_NAME_MPP_X)
@@ -41,7 +41,7 @@ def get_actual_pixel_size_um(slide: openslide.OpenSlide, level: int, fallback_va
         if mpp_x_str and mpp_y_str:
             mpp_x = float(mpp_x_str)
             mpp_y = float(mpp_y_str)
-            # Basic plausibility check (adjust range if needed)
+
             if 0.1 <= mpp_x <= 1.0 and 0.1 <= mpp_y <= 1.0:
                  mpp_l0 = (mpp_x + mpp_y) / 2.0
                  logger.info(f"MPP L0 from slide: X={mpp_x:.4f}, Y={mpp_y:.4f} -> Avg={mpp_l0:.4f} µm/px")
@@ -59,14 +59,12 @@ def get_actual_pixel_size_um(slide: openslide.OpenSlide, level: int, fallback_va
         mpp_l0 = fallback_value
         logger.warning(f"Falling back to default L0 MPP: {mpp_l0:.4f} µm/px.")
 
-    # Calculate MPP for the requested level
     try:
         downsample_at_level = slide.level_downsamples[level]
         mpp_at_level = mpp_l0 * downsample_at_level
         logger.info(f"Calculated MPP for Level {level}: {mpp_at_level:.4f} µm/px (L0 MPP: {mpp_l0:.4f}, Downsample: {downsample_at_level:.2f})")
         return mpp_at_level
     except IndexError:
-        # This shouldn't happen due to the level check at the start, but belts and suspenders
         logger.error(f"Level {level} downsample factor not found unexpectedly.")
         return None
     except Exception as e:
@@ -87,30 +85,7 @@ def convert_batchnorm_to_groupnorm(module):
     module_output = module
     if isinstance(module, torch.nn.BatchNorm2d):
         num_channels = module.num_features
-        # Determine the number of groups. Using num_channels // 8 is a common heuristic.
-        # Ensure num_groups is at least 1 and divides num_channels if possible,
-        # but prioritize having at least one group.
-        # A common strategy is to use 32 groups if possible, or find a divisor.
-        # Here, we stick to the num_channels // 8 approach as requested previously,
-        # ensuring it's at least 1.
         num_groups = max(1, num_channels // 8)
-
-        # Ensure num_groups evenly divides num_channels if > 1.
-        # If not, find the largest divisor <= num_groups.
-        # This adds robustness but might deviate slightly if the original heuristic
-        # didn't guarantee divisibility. Let's stick to the simpler max(1, ...)
-        # based on the original code's apparent intent.
-        # if num_channels % num_groups != 0:
-        #     # Find largest divisor <= num_groups
-        #     found = False
-        #     for ng in range(num_groups, 0, -1):
-        #         if num_channels % ng == 0:
-        #             num_groups = ng
-        #             found = True
-        #             break
-        #     if not found: # Should not happen if num_groups starts at 1
-        #         logger.warning(f"Could not find suitable divisor for GroupNorm with {num_channels} channels. Using num_groups=1.")
-        #         num_groups = 1
 
         logger.debug(f"Converting BatchNorm2d(num_features={num_channels}) to GroupNorm(num_groups={num_groups}, num_channels={num_channels})")
 
@@ -118,20 +93,16 @@ def convert_batchnorm_to_groupnorm(module):
             num_groups=num_groups,
             num_channels=num_channels,
             eps=module.eps,
-            affine=module.affine # Keep affine status from original BatchNorm
+            affine=module.affine 
         )
 
-        # Copy weights and biases if affine transformation was enabled in BatchNorm
         if module.affine:
             with torch.no_grad():
-                # Check if parameters exist before copying
                 if hasattr(module, 'weight') and module.weight is not None:
                      module_output.weight.copy_(module.weight)
                 if hasattr(module, 'bias') and module.bias is not None:
                      module_output.bias.copy_(module.bias)
 
-        # Ensure the new layer is on the same device and dtype as the original (if possible)
-        # Check if the original module had parameters to determine device/dtype
         params = list(module.parameters())
         if params:
             module_output = module_output.to(device=params[0].device, dtype=params[0].dtype)
@@ -163,32 +134,27 @@ def create_weight_map(shape):
         logger.error(f"Cannot create weight map for shape {shape}. Requires tuple/list of length >= 2.")
         return None
 
-    height, width = shape[:2] # Take only the first two dimensions
+    height, width = shape[:2]
     if height <= 0 or width <= 0:
         logger.error(f"Invalid shape dimensions for weight map: {height}x{width}")
         return None
 
     weight = np.ones((height, width), dtype=np.float32)
 
-    # Define edge size for falloff (e.g., 10% of each dimension)
-    edge_size_y = max(1, int(height * 0.1)) # Ensure at least 1 pixel falloff if possible
+    edge_size_y = max(1, int(height * 0.1)) 
     edge_size_x = max(1, int(width * 0.1))
 
-    # Create linear ramps for edges
     ramp_y = np.linspace(0, 1, edge_size_y, dtype=np.float32)
     ramp_x = np.linspace(0, 1, edge_size_x, dtype=np.float32)
 
-    # Apply vertical ramps
-    if height > 1: # Avoid modifying if height is 1
+    if height > 1:
         weight[:edge_size_y, :] *= ramp_y[:, np.newaxis]
         weight[-edge_size_y:, :] *= ramp_y[::-1][:, np.newaxis]
 
-    # Apply horizontal ramps
-    if width > 1: # Avoid modifying if width is 1
+    if width > 1: 
         weight[:, :edge_size_x] *= ramp_x
         weight[:, -edge_size_x:] *= ramp_x[::-1]
 
-    # Clip values to ensure they are strictly between 0 and 1 after multiplication
     weight = np.clip(weight, 0.0, 1.0)
 
     return weight
@@ -221,10 +187,8 @@ def combine_model_predictions(prob_maps, strategy='average'):
 
     if len(prob_maps) == 1:
         logger.info("Only one probability map provided, returning it directly.")
-        # Ensure correct type even for single map
         return prob_maps[0].astype(np.float32) if prob_maps[0] is not None else None
 
-    # Check shapes are consistent
     first_map = prob_maps[0]
     if first_map is None:
         logger.error("First probability map in the list is None.")
@@ -241,12 +205,10 @@ def combine_model_predictions(prob_maps, strategy='average'):
 
     try:
         if strategy == 'average':
-            # Stack along a new axis (axis=0) and compute the mean
             combined = np.mean(np.stack(prob_maps, axis=0), axis=0)
             return combined.astype(np.float32)
 
         elif strategy == 'majority':
-            # This assumes binary segmentation where channel 1 is the target class
             threshold = 0.5
             num_classes = first_shape[-1]
 
@@ -254,20 +216,15 @@ def combine_model_predictions(prob_maps, strategy='average'):
                 logger.error("Majority voting requires at least 2 output channels (bg/fg).")
                 return None
 
-            # Threshold each probability map's foreground channel (channel 1)
             predictions = [(p[:, :, 1] > threshold).astype(np.uint8) for p in prob_maps]
-            # Stack thresholded predictions
             stacked_preds = np.stack(predictions, axis=0)
-            # Sum along the model axis and check if sum > half the models
             combined_majority = (np.sum(stacked_preds, axis=0) > len(prob_maps) / 2).astype(np.uint8)
 
-            # Reconstruct a probability-like map (0.0 or 1.0)
             h, w = combined_majority.shape
-            output_prob_map = np.zeros(first_shape, dtype=np.float32) # Use original shape
+            output_prob_map = np.zeros(first_shape, dtype=np.float32)
             output_prob_map[:, :, 1] = combined_majority.astype(np.float32)
             output_prob_map[:, :, 0] = 1.0 - output_prob_map[:, :, 1]
-            # If more than 2 classes, other channels remain 0, which might need adjustment
-            # depending on the specific multi-class majority logic desired.
+    
             if num_classes > 2:
                 logger.warning("Majority voting applied only to channel 1 vs 0 for >2 classes.")
 
@@ -280,5 +237,5 @@ def combine_model_predictions(prob_maps, strategy='average'):
 
     except Exception as e:
         logger.error(f"Error during model prediction combination (strategy: {strategy}): {e}")
-        logger.error(traceback.format_exc()) # Include traceback for debugging
+        logger.error(traceback.format_exc()) 
         return None

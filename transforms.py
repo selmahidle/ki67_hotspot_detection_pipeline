@@ -1,5 +1,3 @@
-# transforms.py
-
 import numpy as np
 import cv2
 import albumentations as A
@@ -29,19 +27,16 @@ class NormalizeImage(A.ImageOnlyTransform):
         max_value = np.max(img)
 
         if max_value > min_value:
-            # Normalize to 0-1 range
             normalized = (img.astype(np.float32) - min_value) / (max_value - min_value)
         elif max_value == min_value:
             logger.warning("Image has constant value. Normalizing by dividing by 255 if max > 1, else assuming already 0-1 float.")
-            # Handle constant images: if it looks like uint8, divide by 255, else assume float
             if max_value > 1:
                 normalized = img.astype(np.float32) / 255.0
             else:
-                normalized = img.astype(np.float32) # Assume already in 0-1 range
-        else: # Should not happen if min/max work correctly
+                normalized = img.astype(np.float32) 
+        else: 
              normalized = img.astype(np.float32)
 
-        # Ensure output is float32 for PyTorch
         return normalized.astype(np.float32)
 
 
@@ -70,59 +65,52 @@ def apply_clahe(image, clip_limit=4.0, tile_grid_size=(8, 8)):
             image = np.array(image)
         except Exception as e:
             logger.error(f"Could not convert input to numpy array for CLAHE: {e}")
-            return image # Return original input
+            return image 
 
-    # --- Convert to uint8 ---
-    # Check if float (0-1 range) and scale
     if image.dtype != np.uint8:
         if np.max(image) <= 1.0 and np.min(image) >= 0.0 and image.dtype.kind == 'f':
             logger.debug("CLAHE input is float 0-1, converting to uint8.")
             image_uint8 = (image * 255).astype(np.uint8)
         else:
             try:
-                # Try direct conversion, might work for int types or fail for others
                 logger.debug(f"CLAHE input is {image.dtype}, attempting direct conversion to uint8.")
                 image_uint8 = image.astype(np.uint8)
             except ValueError:
                  logger.error(f"Cannot convert image (dtype: {image.dtype}, range: [{np.min(image)}, {np.max(image)}]) to uint8 for CLAHE. Returning original.")
-                 return image # Return original if conversion fails
+                 return image
     else:
         image_uint8 = image
 
-    # --- Ensure RGB format ---
-    if len(image_uint8.shape) == 2: # Grayscale
+    if len(image_uint8.shape) == 2:
         logger.debug("CLAHE input is grayscale, converting to RGB.")
         image_rgb = cv2.cvtColor(image_uint8, cv2.COLOR_GRAY2RGB)
-    elif len(image_uint8.shape) == 3 and image_uint8.shape[2] == 4: # RGBA
+    elif len(image_uint8.shape) == 3 and image_uint8.shape[2] == 4:
         logger.debug("CLAHE input is RGBA, converting to RGB.")
         image_rgb = cv2.cvtColor(image_uint8, cv2.COLOR_RGBA2RGB)
-    elif len(image_uint8.shape) == 3 and image_uint8.shape[2] == 3: # RGB
+    elif len(image_uint8.shape) == 3 and image_uint8.shape[2] == 3:
         image_rgb = image_uint8
     else:
          logger.error(f"CLAHE expects Grayscale, RGB, or RGBA image, got shape {image_uint8.shape}. Returning original.")
-         return image # Return original non-uint8 image
+         return image 
 
     # --- Apply CLAHE ---
     try:
-        # Convert RGB to LAB
         lab = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2LAB)
         l, a, b = cv2.split(lab)
 
-        # Apply CLAHE to L-channel
         clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
         cl = clahe.apply(l)
 
-        # Merge channels and convert back to RGB
         limg = cv2.merge((cl, a, b))
         final_rgb = cv2.cvtColor(limg, cv2.COLOR_LAB2RGB)
         logger.debug("CLAHE applied successfully.")
         return final_rgb
     except cv2.error as e:
          logger.error(f"OpenCV error during CLAHE processing: {e}")
-         return image_rgb # Return RGB image if CLAHE fails
+         return image_rgb 
     except Exception as e:
          logger.error(f"Unexpected error during CLAHE: {e}")
-         return image_rgb # Return RGB image
+         return image_rgb 
 
 
 class ApplyCLAHE(A.ImageOnlyTransform):
@@ -147,8 +135,8 @@ def get_transforms():
     Used for Tumor Segmentation stage in the original script.
     """
     return A.Compose([
-        ApplyCLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=1.0), # Use p=1.0
-        NormalizeImage(p=1.0), # Use p=1.0
+        ApplyCLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=1.0),
+        NormalizeImage(p=1.0),
         ToTensorV2()
     ])
 
