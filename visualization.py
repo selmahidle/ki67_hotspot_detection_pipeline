@@ -69,88 +69,58 @@ def format_for_save(img_array):
             return np.zeros((h, w, 3), dtype=np.uint8)
         except: return np.zeros((100, 100, 3), dtype=np.uint8)
 
-
-def save_stardist_comparison_plot(hs_patch_rgb, labels_filtered, ref_mask, save_path):
+def save_stardist_comparison_plot(hs_patch_rgb, labels_filtered, ref_mask, save_path, classified_labels_dab=None):
     """
-    Generates and saves a Matplotlib comparison plot: original patch, reference mask, StarDist overlay.
+    Generates and saves a Matplotlib comparison plot: 
+    1. Original patch 
+    2. Reference mask (Tumor)
+    3. StarDist overlay
+    4. DAB Classification (DAB+ Red, DAB- Green)
     """
     logger.debug(f"Generating Matplotlib StarDist comparison plot for: {save_path}")
 
     try:
+        # --- Panel 1: Original Image ---
         original_display = format_for_save(hs_patch_rgb.copy())
-        if original_display is None:
-            logger.error("Original patch (hs_patch_rgb) could not be formatted. Cannot create comparison plot.")
-            original_display = np.zeros((100, 100, 3), dtype=np.uint8)
-            original_shape = (100,100)
-        elif original_display.ndim != 3 or original_display.shape[2] != 3:
-             logger.warning(f"Formatted original_display has unexpected shape {original_display.shape}. Attempting to use, but might fail.")
-             original_shape = original_display.shape[:2]
-        else:
-            original_shape = original_display.shape[:2]
+        original_shape = original_display.shape[:2]
 
+        # --- Panel 3: StarDist Overlay --- (Prepared early to reuse base image)
         pred_overlay_display = np.zeros_like(original_display, dtype=np.uint8)
         if labels_filtered is not None and isinstance(labels_filtered, np.ndarray) and labels_filtered.ndim == 2 and labels_filtered.size > 0:
-            labels_viz = labels_filtered
-            if labels_viz.shape != original_shape:
-                logger.debug(f"Resizing labels_filtered from {labels_viz.shape} to {original_shape}")
-                labels_viz = resize(labels_viz, original_shape, order=0, preserve_range=True, anti_aliasing=False).astype(labels_filtered.dtype)
+            labels_viz = resize(labels_filtered, original_shape, order=0, preserve_range=True, anti_aliasing=False).astype(labels_filtered.dtype)
+            base_for_overlay_float = img_as_float(original_display)
+            pred_overlay_rgb_float = label2rgb(labels_viz, image=base_for_overlay_float, bg_label=0, bg_color=None, kind='overlay', image_alpha=0.5, alpha=0.5)
+            pred_overlay_display = format_for_save(pred_overlay_rgb_float)
 
-            base_for_overlay = hs_patch_rgb.copy()
-            if base_for_overlay.shape[:2] != labels_viz.shape:
-                 base_for_overlay_resized = cv2.resize(base_for_overlay, (labels_viz.shape[1], labels_viz.shape[0]))
-            else:
-                 base_for_overlay_resized = base_for_overlay
-
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                hs_patch_rgb_float_for_overlay = img_as_float(base_for_overlay_resized)
-
-            pred_overlay_rgb_float = label2rgb(labels_viz, image=hs_patch_rgb_float_for_overlay, bg_label=0, bg_color=None, kind='overlay', image_alpha=0.5, alpha=0.5)
-            formatted_pred_overlay = format_for_save(pred_overlay_rgb_float)
-            if formatted_pred_overlay is not None and formatted_pred_overlay.shape == pred_overlay_display.shape :
-                pred_overlay_display = formatted_pred_overlay
-            elif formatted_pred_overlay is not None:
-                logger.warning(f"Prediction overlay shape {formatted_pred_overlay.shape} mismatch with placeholder {pred_overlay_display.shape}. Using placeholder.")
-            else:
-                logger.warning("format_for_save failed for prediction overlay. Using placeholder.")
-        else:
-            logger.debug("labels_filtered is None, empty, or not a 2D array. Using placeholder for prediction overlay.")
-
+        # --- Panel 2: Reference (Tumor) Mask ---
         gt_display = np.zeros_like(original_display, dtype=np.uint8)
         if ref_mask is not None and isinstance(ref_mask, np.ndarray) and ref_mask.ndim == 2 and ref_mask.size > 0:
-            ref_mask_viz = ref_mask
-            if ref_mask_viz.shape != original_shape:
-                logger.debug(f"Resizing ref_mask from {ref_mask_viz.shape} to {original_shape}")
-                ref_mask_viz = resize(ref_mask_viz, original_shape, order=0, preserve_range=True, anti_aliasing=False)
+            ref_mask_viz = resize(ref_mask, original_shape, order=0, preserve_range=True, anti_aliasing=False)
+            gt_display = format_for_save(((ref_mask_viz > 0) * 255).astype(np.uint8))
+            
+        # --- Panel 4: DAB Classification ---
+        dab_class_display = np.zeros_like(original_display, dtype=np.uint8)
+        if classified_labels_dab is not None and classified_labels_dab.size > 0:
+            # Resize classified mask to match display shape
+            classified_labels_resized = resize(classified_labels_dab, original_shape, order=0, preserve_range=True, anti_aliasing=False).astype(classified_labels_dab.dtype)
+            
+            # Define colors: label 1 (DAB-) -> Green, label 2 (DAB+) -> Red
+            # label2rgb expects float colors [0,1]
+            dab_colors = [(0, 1, 0), (1, 0, 0)]  # Green for 1, Red for 2
+            
+            # Create RGB image from the classified labels
+            dab_viz_float = label2rgb(classified_labels_resized, bg_label=0, bg_color=(0,0,0), colors=dab_colors)
+            dab_class_display = format_for_save(dab_viz_float)
 
-            ref_mask_binary_uint8 = ((ref_mask_viz > 0) * 255).astype(np.uint8)
-            formatted_gt_display = format_for_save(ref_mask_binary_uint8)
-            if formatted_gt_display is not None and formatted_gt_display.shape == gt_display.shape:
-                gt_display = formatted_gt_display
-            elif formatted_gt_display is not None:
-                logger.warning(f"GT display shape {formatted_gt_display.shape} mismatch with placeholder {gt_display.shape}. Using placeholder.")
-            else:
-                logger.warning("format_for_save failed for reference mask. Using placeholder.")
-        else:
-            logger.debug("ref_mask is None, empty, or not a 2D array. Using placeholder for GT display.")
+        # --- Create and Save Plot ---
+        fig, axes = plt.subplots(1, 4, figsize=(24, 6)) # Changed to 1x4
+        axes = axes.ravel()
 
-        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-        if not isinstance(axes, np.ndarray):
-            axes = [axes]
-        else:
-            axes = axes.ravel()
+        titles = ['Original Patch', 'Reference (Tumor) Mask', 'StarDist Overlay', 'DAB Classification']
+        images_to_plot = [original_display, gt_display, pred_overlay_display, dab_class_display]
 
-        titles = ['Original Patch', 'Reference Mask', 'StarDist Prediction']
-        images_to_plot = [original_display, gt_display, pred_overlay_display]
-
-        for i_ax, (ax, img_data, title_text) in enumerate(zip(axes, images_to_plot, titles)):
-            if img_data is not None:
-                if img_data.dtype != np.uint8:
-                    logger.warning(f"Image data for '{title_text}' is not uint8 (dtype: {img_data.dtype}). Attempting to display.")
-                ax.imshow(img_data)
-            else:
-                ax.text(0.5, 0.5, 'Image\nNot Available', ha='center', va='center', fontsize=10, transform=ax.transAxes)
-                logger.warning(f"Image data for subplot '{title_text}' was None.")
+        for ax, img_data, title_text in zip(axes, images_to_plot, titles):
+            ax.imshow(img_data)
             ax.set_title(title_text, fontsize=12)
             ax.axis('off')
 
@@ -192,6 +162,7 @@ def draw_label_contours_on_bgr(bgr_image_roi, labels, line_color=(0, 255, 0), li
 def generate_overlay(slide, overlay_level, hotspot_level,
                      tissue_mask_overlay, tumor_mask_overlay, cell_mask_binary_l2,
                      hotspots,
+                     dab_plus_mask_l2_overlay,
                      debug_dir=None,
                      outline_alpha=0.7,
                      hs_text_bg_alpha=0.5,
@@ -250,8 +221,8 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                 logger.error(f"Error resizing masks for hotspot internal drawing: {e_resize_hs}")
                 return
 
-            sd_color_dab_pos_bgr = (255, 0, 0)  # Blue for DAB+ StarDist cells
-            sd_color_dab_neg_bgr = (0, 255, 0)  # Green for DAB- StarDist cells
+            sd_color_dab_pos_bgr = (0, 255, 0)  
+            sd_color_dab_neg_bgr = (255, 0, 0)  
 
             unique_sd_ids = np.unique(stardist_labels_hs[stardist_labels_hs != 0])
             for sd_id in unique_sd_ids:
@@ -260,13 +231,15 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                 dab_px_in_obj = classified_dab_hs[obj_mask_bool]
                 if dab_px_in_obj.size == 0: continue
 
-                counts = np.bincount(dab_px_in_obj.astype(int), minlength=3) # 0: no class, 1: pos, 2: neg
-                n_pos, n_neg = counts[1], counts[2]
+                counts = np.bincount(dab_px_in_obj.astype(int), minlength=3)
+                
+                n_neg, n_pos = counts[1], counts[2]
+                
 
                 fill_col, border_col = None, None
-                if n_pos > 0 and n_pos >= n_neg: # Classified as DAB positive
+                if n_pos > 0 and n_pos >= n_neg:
                     fill_col, border_col = sd_color_dab_pos_bgr, sd_color_dab_pos_bgr
-                elif n_neg > 0: # Classified as DAB negative
+                elif n_neg > 0:
                     fill_col, border_col = sd_color_dab_neg_bgr, sd_color_dab_neg_bgr
 
                 if fill_col:
@@ -276,7 +249,7 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                     cv2.addWeighted(temp_fill_layer, fill_alpha, roi_bgr_to_draw_on, 1 - fill_alpha, 0, roi_bgr_to_draw_on)
                     cv2.drawContours(roi_bgr_to_draw_on, contours, -1, border_col, border_thick)
 
-        # 1. General Cell Mask (filled yellow)
+        # 1. Tumor Cell Mask 
         cell_mask_scaled_overlay = None
         if cell_mask_binary_l2 is not None and np.any(cell_mask_binary_l2):
             cell_mask_u8 = cell_mask_binary_l2.astype(np.uint8)
@@ -291,8 +264,8 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                 alpha_yellow_fill = 0.4
                 cv2.addWeighted(fill_layer_yellow_cells, alpha_yellow_fill, overlay_bgr, 1 - alpha_yellow_fill, 0, overlay_bgr)
 
-        # 2. DAB+ regions (filled dark red, intersected with cell mask)
-        dab_plus_on_overlay_img = get_dab_mask(overlay_rgb_original, dab_threshold=0.15)
+        # 2. DAB+ regions 
+        dab_plus_on_overlay_img = dab_plus_mask_l2_overlay if dab_plus_mask_l2_overlay is not None else np.zeros_like(overlay_rgb_original[:,:,0])
         contours_dab_for_border = None
 
         if dab_plus_on_overlay_img.size > 0 and cell_mask_scaled_overlay is not None and np.any(cell_mask_scaled_overlay):
@@ -310,12 +283,10 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                 cv2.addWeighted(fill_layer_dab, 0.35, overlay_bgr, 0.65, 0, overlay_bgr) # Fill
                 contours_dab_for_border, _ = cv2.findContours(final_dab_regions_to_draw_for_fill, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-
-        # --- Snapshot before drawing main outlines ---
         overlay_bgr_with_fills = overlay_bgr.copy()
 
         # 3. Draw Main Outlines (Tissue, Tumor, DAB+ border) - these will be made semi-transparent
-        temp_outline_drawing_layer = overlay_bgr.copy() # Draw outlines on a fresh copy of the current state
+        temp_outline_drawing_layer = overlay_bgr.copy()
 
         # Tissue Outline
         if tissue_mask_overlay is not None and np.any(tissue_mask_overlay):
@@ -339,10 +310,8 @@ def generate_overlay(slide, overlay_level, hotspot_level,
 
         # Apply transparency to the outlines
         if outline_alpha < 1.0:
-            # Blend the layer with outlines (temp_outline_drawing_layer) onto the layer that only had fills (overlay_bgr_with_fills)
-            # The result goes into overlay_bgr
             cv2.addWeighted(temp_outline_drawing_layer, outline_alpha, overlay_bgr_with_fills, 1 - outline_alpha, 0, overlay_bgr)
-        else: # If alpha is 1.0, just use the layer with outlines
+        else:
             overlay_bgr = temp_outline_drawing_layer
 
 
@@ -364,28 +333,36 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                     logger.warning(f"Skipping hotspot {i+1} due to zero/negative clamped dimensions for drawing.")
                     continue
 
-                # --- Make Hotspot Box Outline Semi-Transparent ---
                 hs_col = hotspot_box_colors[i % len(hotspot_box_colors)]
+                
+                # 1. Get the region of interest (ROI) from the *original* base image (provides a clean background)
+                original_base_roi = overlay_rgb_original[y_ol_clamped : y_ol_clamped + h_ol_clamped, x_ol_clamped : x_ol_clamped + w_ol_clamped]
+                
+                # 2. Convert this clean ROI to BGR for drawing with OpenCV
+                clean_bgr_roi_for_drawing = cv2.cvtColor(original_base_roi, cv2.COLOR_RGB2BGR)
+                
+                # 3. Draw detailed StarDist cells onto the CLEAN BGR ROI
+                stardist_labels_for_hs = hotspot_data.get('stardist_labels')
+                classified_labels_dab_for_hs = hotspot_data.get('classified_labels_dab_hs')
+                if clean_bgr_roi_for_drawing.size > 0 and stardist_labels_for_hs is not None and classified_labels_dab_for_hs is not None:
+                    _draw_stardist_in_roi(clean_bgr_roi_for_drawing, stardist_labels_for_hs, classified_labels_dab_for_hs, fill_alpha=0.35, border_thick=1)
+                
+                # 4. Now, place this newly drawn detailed ROI back onto the main overlay image
+                overlay_bgr[y_ol_clamped : y_ol_clamped + h_ol_clamped, x_ol_clamped : x_ol_clamped + w_ol_clamped] = clean_bgr_roi_for_drawing
+                
+                # 5. Finally, draw the semi-transparent hotspot box ON TOP of everything
                 if w_ol_clamped > 0 and h_ol_clamped > 0:
-                    hotspot_box_region_original = overlay_bgr[y_ol_clamped : y_ol_clamped + h_ol_clamped,
-                                                              x_ol_clamped : x_ol_clamped + w_ol_clamped]
-                    if hotspot_box_region_original.size > 0:
-                        temp_box_drawing_layer = hotspot_box_region_original.copy()
+                    hotspot_box_region_to_draw_on = overlay_bgr[y_ol_clamped : y_ol_clamped + h_ol_clamped, x_ol_clamped : x_ol_clamped + w_ol_clamped]
+                    if hotspot_box_region_to_draw_on.size > 0:
+                        temp_box_drawing_layer = hotspot_box_region_to_draw_on.copy()
                         cv2.rectangle(temp_box_drawing_layer, (0, 0),
                                       (w_ol_clamped - 1, h_ol_clamped - 1),
                                       hs_col, hs_box_thick)
                         blended_box_region = cv2.addWeighted(temp_box_drawing_layer, outline_alpha,
-                                                             hotspot_box_region_original, 1 - outline_alpha, 0)
+                                                             hotspot_box_region_to_draw_on, 1 - outline_alpha, 0)
                         overlay_bgr[y_ol_clamped : y_ol_clamped + h_ol_clamped,
                                     x_ol_clamped : x_ol_clamped + w_ol_clamped] = blended_box_region
-                # --- End Hotspot Box Outline Transparency ---
-
-                # StarDist details drawing (modifies overlay_bgr in place within the ROI)
-                hotspot_roi_on_overlay_bgr = overlay_bgr[y_ol_clamped : y_ol_clamped + h_ol_clamped, x_ol_clamped : x_ol_clamped + w_ol_clamped]
-                stardist_labels_for_hs = hotspot_data.get('stardist_labels')
-                classified_labels_dab_for_hs = hotspot_data.get('classified_labels_dab_hs')
-                if hotspot_roi_on_overlay_bgr.size > 0 and stardist_labels_for_hs is not None and classified_labels_dab_for_hs is not None:
-                    _draw_stardist_in_roi(hotspot_roi_on_overlay_bgr, stardist_labels_for_hs, classified_labels_dab_for_hs, fill_alpha=0.35, border_thick=1)
+            
 
                 # Hotspot Text with Background
                 pi = hotspot_data.get('stardist_proliferation_index')

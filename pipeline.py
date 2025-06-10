@@ -570,18 +570,19 @@ def process_slide_ki67(slide_path, output_dir, tumor_model, cell_model, stardist
         # Resize tissue_mask_l5 to overlay_level (L2)
         tissue_mask_overlay_final = cv2.resize(tissue_mask_l5, target_overlay_shape_wh, interpolation=cv2.INTER_NEAREST)
 
-        # tumor_mask_l2 is already at overlay_level
-        # cell_mask_binary_l2 is already at overlay_level
         final_overlay = visualization.generate_overlay(
             slide=slide,
             overlay_level=overlay_level,
-            hotspot_level=hotspot_level, # Level at which hotspot coords are defined for drawing
+            hotspot_level=hotspot_level,
             tissue_mask_overlay=tissue_mask_overlay_final,
             tumor_mask_overlay=tumor_mask_l2,
             cell_mask_binary_l2=cell_mask_binary_l2,
-            hotspots=hotspots, # Final ranked hotspots
+            dab_plus_mask_l2_overlay=dab_plus_mask_l2,
+            hotspots=hotspots,
             debug_dir=overlay_debug_dir
         )
+
+
         if final_overlay is not None:
             overlay_filename = os.path.join(image_output_dir, f"{slide_name}_final_overlay_L{overlay_level}.jpg")
             png_filename = os.path.join(image_output_dir, f"{slide_name}_final_overlay_L{overlay_level}_temp.png") # Temp for lossless intermediate
