@@ -314,72 +314,85 @@ def generate_overlay(slide, overlay_level, hotspot_level,
         else:
             overlay_bgr = temp_outline_drawing_layer
 
-        # 4. Hotspots with internal StarDist details and text with background
+        # 4. Hotspot Layered Drawing
         if hotspots:
-            logger.info(f"Drawing {len(hotspots)} hotspots...")
+            logger.info(f"Drawing {len(hotspots)} hotspots using layered approach...")
             sf_coords_hs_drawing = slide.level_downsamples[overlay_level] / slide.level_downsamples[hotspot_level]
+
+            # === STAGE 1: Draw all cell details ===
+            # This loop draws the colored StarDist cells for all hotspots.
+            # By drawing onto the main overlay_bgr, overlapping regions will blend correctly.
+            for hotspot_data in hotspots:
+                x_hl, y_hl = hotspot_data['coords_level']
+                w_hl, h_hl = hotspot_data['size_level']
+                x_ol, y_ol = int(x_hl * sf_coords_hs_drawing), int(y_hl * sf_coords_hs_drawing)
+                w_ol, h_ol = int(w_hl * sf_coords_hs_drawing), int(h_hl * sf_coords_hs_drawing)
+                
+                # Define the Region of Interest (ROI) on the main overlay
+                roi = overlay_bgr[
+                    min(max(0, y_ol), overlay_bgr.shape[0]) : min(y_ol + h_ol, overlay_bgr.shape[0]),
+                    min(max(0, x_ol), overlay_bgr.shape[1]) : min(x_ol + w_ol, overlay_bgr.shape[1])
+                ]
+
+                if roi.size > 0:
+                    stardist_labels_for_hs = hotspot_data.get('stardist_labels')
+                    classified_labels_dab_for_hs = hotspot_data.get('classified_labels_dab_hs')
+                    
+                    if stardist_labels_for_hs is not None and classified_labels_dab_for_hs is not None:
+                        # The helper function modifies the ROI in-place, which updates overlay_bgr
+                        _draw_stardist_in_roi(
+                            roi, 
+                            stardist_labels_for_hs, 
+                            classified_labels_dab_for_hs, 
+                            fill_alpha=0.4,  # Slightly increased alpha for visibility
+                            border_thick=1
+                        )
+
+            # === STAGE 2: Draw all semi-transparent hotspot boxes ===
+            # This ensures boxes are drawn on top of all cell details.
             for i, hotspot_data in enumerate(hotspots):
                 x_hl, y_hl = hotspot_data['coords_level']
                 w_hl, h_hl = hotspot_data['size_level']
                 x_ol, y_ol = int(x_hl * sf_coords_hs_drawing), int(y_hl * sf_coords_hs_drawing)
                 w_ol, h_ol = int(w_hl * sf_coords_hs_drawing), int(h_hl * sf_coords_hs_drawing)
-                x_ol_clamped = min(max(0, x_ol), overlay_bgr.shape[1] - 1)
-                y_ol_clamped = min(max(0, y_ol), overlay_bgr.shape[0] - 1)
-                w_ol_clamped = min(w_ol, overlay_bgr.shape[1] - x_ol_clamped)
-                h_ol_clamped = min(h_ol, overlay_bgr.shape[0] - y_ol_clamped)
-
-                if w_ol_clamped <= 0 or h_ol_clamped <= 0:
-                    logger.warning(f"Skipping hotspot {i+1} due to zero/negative clamped dimensions for drawing.")
-                    continue
-
-                # 1. Get the region of interest (ROI) from the *original* base image (provides a clean background)
-                original_base_roi = overlay_rgb_original[y_ol_clamped : y_ol_clamped + h_ol_clamped, x_ol_clamped : x_ol_clamped + w_ol_clamped]
                 
-                # 2. Convert this clean ROI to BGR for drawing with OpenCV
-                clean_bgr_roi_for_drawing = cv2.cvtColor(original_base_roi, cv2.COLOR_RGB2BGR)
-                
-                # 3. Draw detailed StarDist cells onto the CLEAN BGR ROI
-                stardist_labels_for_hs = hotspot_data.get('stardist_labels')
-                classified_labels_dab_for_hs = hotspot_data.get('classified_labels_dab_hs')
-                if clean_bgr_roi_for_drawing.size > 0 and stardist_labels_for_hs is not None and classified_labels_dab_for_hs is not None:
-                    _draw_stardist_in_roi(clean_bgr_roi_for_drawing, stardist_labels_for_hs, classified_labels_dab_for_hs, fill_alpha=0.35, border_thick=1)
-                
-                # 4. Now, place this newly drawn detailed ROI back onto the main overlay image
-                overlay_bgr[y_ol_clamped : y_ol_clamped + h_ol_clamped, x_ol_clamped : x_ol_clamped + w_ol_clamped] = clean_bgr_roi_for_drawing
-                
-                # 5. Finally, draw the semi-transparent hotspot box ON TOP of everything
                 hs_col = hotspot_box_colors[i % len(hotspot_box_colors)]
-                if w_ol_clamped > 0 and h_ol_clamped > 0:
-                    hotspot_box_region_to_draw_on = overlay_bgr[y_ol_clamped : y_ol_clamped + h_ol_clamped, x_ol_clamped : x_ol_clamped + w_ol_clamped]
-                    if hotspot_box_region_to_draw_on.size > 0:
-                        temp_box_drawing_layer = hotspot_box_region_to_draw_on.copy()
-                        cv2.rectangle(temp_box_drawing_layer, (0, 0),
-                                      (w_ol_clamped - 1, h_ol_clamped - 1),
-                                      hs_col, hs_box_thick)
-                        blended_box_region = cv2.addWeighted(temp_box_drawing_layer, outline_alpha,
-                                                             hotspot_box_region_to_draw_on, 1 - outline_alpha, 0)
-                        overlay_bgr[y_ol_clamped : y_ol_clamped + h_ol_clamped,
-                                    x_ol_clamped : x_ol_clamped + w_ol_clamped] = blended_box_region
-        
+                
+                # We need a temporary layer for blending the box itself
+                temp_box_layer = overlay_bgr.copy()
+                cv2.rectangle(temp_box_layer, (x_ol, y_ol), (x_ol + w_ol, y_ol + h_ol), hs_col, hs_box_thick)
+                cv2.addWeighted(temp_box_layer, outline_alpha, overlay_bgr, 1 - outline_alpha, 0, overlay_bgr)
 
-                # Hotspot Text with Background
+            # === STAGE 3: Draw all text labels (in reverse order) ===
+            # Drawing in reverse ensures HS1 text is on top of HS2, etc.
+            for i, hotspot_data in reversed(list(enumerate(hotspots))):
+                x_hl, y_hl = hotspot_data['coords_level']
+                w_hl, h_hl = hotspot_data['size_level']
+                x_ol, y_ol = int(x_hl * sf_coords_hs_drawing), int(y_hl * sf_coords_hs_drawing)
+                w_ol, h_ol = int(w_hl * sf_coords_hs_drawing), int(h_hl * sf_coords_hs_drawing)
+
                 pi = hotspot_data.get('stardist_proliferation_index')
                 lbl_text_hs = f"HS{i+1}"
                 if pi is not None: lbl_text_hs += f": {pi*100:.1f}%"
                 else: lbl_text_hs += ": N/A"
+                
                 (tw_hs, th_hs), bl_hs = cv2.getTextSize(lbl_text_hs, font, font_scale_hotspot_label, hs_lbl_thick)
-                text_y_baseline = max(th_hs + hs_text_bg_padding + 5, y_ol_clamped - bl_hs - hs_text_bg_padding - 5)
-                text_x_origin = max(hs_text_bg_padding + 5, x_ol_clamped + (w_ol_clamped - tw_hs) // 2)
+                text_y_baseline = max(th_hs + hs_text_bg_padding + 5, y_ol - bl_hs - hs_text_bg_padding - 5)
+                text_x_origin = max(hs_text_bg_padding + 5, x_ol + (w_ol - tw_hs) // 2)
+
                 bg_x1, bg_y1 = text_x_origin - hs_text_bg_padding, text_y_baseline - th_hs - hs_text_bg_padding
                 bg_x2, bg_y2 = text_x_origin + tw_hs + hs_text_bg_padding, text_y_baseline + bl_hs + hs_text_bg_padding
+                
                 bg_x1_cl, bg_y1_cl = max(0, bg_x1), max(0, bg_y1)
                 bg_x2_cl, bg_y2_cl = min(overlay_w, bg_x2), min(overlay_h, bg_y2)
+
                 if bg_x2_cl > bg_x1_cl and bg_y2_cl > bg_y1_cl and hs_text_bg_alpha > 0:
                     text_bg_roi_on_overlay = overlay_bgr[bg_y1_cl:bg_y2_cl, bg_x1_cl:bg_x2_cl]
-                    if text_bg_roi_on_overlay.size > 0 :
+                    if text_bg_roi_on_overlay.size > 0:
                         bg_color_patch = np.full_like(text_bg_roi_on_overlay, hs_text_bg_color_bgr)
                         blended_roi = cv2.addWeighted(bg_color_patch, hs_text_bg_alpha, text_bg_roi_on_overlay, 1 - hs_text_bg_alpha, 0)
                         overlay_bgr[bg_y1_cl:bg_y2_cl, bg_x1_cl:bg_x2_cl] = blended_roi
+                
                 text_color_bgr, shadow_color_bgr = (255,255,255), (0,0,0)
                 cv2.putText(overlay_bgr, lbl_text_hs, (text_x_origin + 1, text_y_baseline + 1), font, font_scale_hotspot_label, shadow_color_bgr, hs_lbl_thick + 1, cv2.LINE_AA)
                 cv2.putText(overlay_bgr, lbl_text_hs, (text_x_origin, text_y_baseline), font, font_scale_hotspot_label, text_color_bgr, hs_lbl_thick, cv2.LINE_AA)
