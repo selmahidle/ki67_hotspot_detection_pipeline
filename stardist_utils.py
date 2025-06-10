@@ -3,9 +3,7 @@ import numpy as np
 import warnings
 from stardist.models import StarDist2D
 from csbdeep.utils import normalize
-# import glob # Not used directly here
-from skimage.color import label2rgb # Only needed if refine_hotspot generates overlay (which it does)
-# import imageio # Not used
+from skimage.color import label2rgb 
 import cv2
 import openslide
 import os
@@ -17,9 +15,7 @@ import sys
 import numpy as np
 import logging
 import visualization
-
-# Assumed to be in stain_utils.py and imported correctly elsewhere when needed
-# from stain_utils import get_dab_mask
+from stain_utils import get_dab_mask
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +109,7 @@ def extract_patch_from_slide(slide, coords_level, size_level, hotspot_level):
     hs_patch_rgb = np.array(hs_patch_pil)
     return hs_patch_rgb
 
+
 def classify_labels_by_dab(
     labels_filtered: np.ndarray,
     hs_patch_rgb: np.ndarray,
@@ -121,127 +118,48 @@ def classify_labels_by_dab(
     min_dab_positive_ratio: float = 0.1
 ) -> tuple:
     """
-    Classify StarDist-detected nuclei as DAB- or DAB+ based on staining,
-    considering ONLY nuclei within the provided tumor_cell_mask_patch.
-
-    Args:
-        labels_filtered (ndarray): 2D label image from StarDist (H, W, uint16).
-        hs_patch_rgb (ndarray): Original RGB image patch (H, W, 3).
-        tumor_cell_mask_patch (ndarray): Binary tumor cell mask patch (H, W, uint8, values 0 or 1).
-                                    Must be the same shape as labels_filtered.
-        dab_threshold (float): OD threshold for DAB mask generation.
-        min_dab_positive_ratio (float): Min ratio of DAB+ pixels for nucleus positivity.
-
-    Returns:
-        tuple: Contains:
-            - labels_classified (ndarray): 2D array (H,W,uint8) with:
-                                           0 (bg),
-                                           1 (DAB- tumor nucleus),
-                                           2 (DAB+ tumor nucleus),
-                                           3 (non-tumor nucleus - optional, currently not used, effectively bg)
-            - ki67_positive_tumor_nuclei_count (int): Count of DAB+ nuclei WITHIN tumor.
-            - total_tumor_nuclei_count (int): Total nuclei WITHIN tumor.
-            - positive_tumor_nuclei_centroids (list): (y,x) for DAB+ tumor nuclei.
-            - all_tumor_nuclei_centroids (list): (y,x) for ALL tumor nuclei.
+    Classify StarDist-detected nuclei as DAB- or DAB+ based on staining.
+    It is ASSUMED that labels_filtered has ALREADY been filtered to only include
+    nuclei within the desired tumor region.
     """
-    try:
-        from stain_utils import get_dab_mask # Local import
-    except ImportError:
-        logger.error("Could not import get_dab_mask from stain_utils.")
-        shape = labels_filtered.shape if labels_filtered is not None else (0,0)
-        return np.zeros(shape, dtype=np.uint8), 0, 0, [], []
 
     if labels_filtered is None or hs_patch_rgb is None or tumor_cell_mask_patch is None:
         logger.error("classify_labels_by_dab received None for critical input (labels, RGB patch, or tumor mask).")
-        shape = labels_filtered.shape if labels_filtered is not None else \
-                (hs_patch_rgb.shape[:2] if hs_patch_rgb is not None else \
-                 (tumor_cell_mask_patch.shape[:2] if tumor_cell_mask_patch is not None else (0,0)))
+        shape = labels_filtered.shape if labels_filtered is not None else (0,0)
         return np.zeros(shape, dtype=np.uint8), 0, 0, [], []
 
     if labels_filtered.shape != tumor_cell_mask_patch.shape:
-        logger.error(f"Shape mismatch: labels_filtered {labels_filtered.shape} vs tumor_cell_mask_patch {tumor_cell_mask_patch.shape}")
-        # Attempt to resize tumor_cell_mask_patch if it's the one with different shape, as labels_filtered dictates processing
-        if tumor_cell_mask_patch.shape != hs_patch_rgb.shape[:2]:
-             logger.warning(f"Resizing tumor_cell_mask_patch from {tumor_cell_mask_patch.shape} to {hs_patch_rgb.shape[:2]} to match RGB patch")
-             tumor_cell_mask_patch = cv2.resize(tumor_cell_mask_patch.astype(np.uint8), (hs_patch_rgb.shape[1], hs_patch_rgb.shape[0]), interpolation=cv2.INTER_NEAREST)
-        if labels_filtered.shape != tumor_cell_mask_patch.shape: # Check again after potential resize
-             logger.error("Shape mismatch persists after attempting to resize tumor_cell_mask_patch. Cannot proceed.")
-             return np.zeros_like(labels_filtered, dtype=np.uint8), 0, 0, [], []
-
+        logger.warning(f"Resizing tumor_cell_mask_patch from {tumor_cell_mask_patch.shape} to {labels_filtered.shape} to match labels.")
+        tumor_cell_mask_patch = cv2.resize(tumor_cell_mask_patch.astype(np.uint8), (labels_filtered.shape[1], labels_filtered.shape[0]), interpolation=cv2.INTER_NEAREST)
 
     labels_classified = np.zeros_like(labels_filtered, dtype=np.uint8)
     positive_tumor_nuclei_centroids = []
     all_tumor_nuclei_centroids = []
     ki67_positive_tumor_nuclei_count = 0
-    total_tumor_nuclei_count = 0 # Counts only nuclei within the tumor mask
+    total_tumor_nuclei_count = 0
 
-    if not np.issubdtype(labels_filtered.dtype, np.integer):
-        logger.warning("labels_filtered dtype not integer, attempting conversion.")
-        try:
-            labels_filtered_int = labels_filtered.astype(np.uint16)
-        except ValueError:
-            logger.error("Could not convert labels_filtered to integer type."); return np.zeros_like(labels_filtered, dtype=np.uint8), 0, 0, [], []
-    else:
-        labels_filtered_int = labels_filtered
-
-    try:
-        props = regionprops(labels_filtered_int)
-    except TypeError as e_props:
-         logger.error(f"TypeError during regionprops: {e_props}"); return np.zeros_like(labels_filtered, dtype=np.uint8), 0, 0, [], []
+    labels_filtered_int = labels_filtered.astype(np.uint16)
+    props = regionprops(labels_filtered_int)
 
     for prop in props:
         label = prop.label
         if not np.all(np.isfinite(prop.centroid)):
              logger.warning(f"Non-finite centroid for label {label}. Skipping."); continue
-
-        # Centroid coordinates (row, col) which correspond to (y, x)
+        
         centroid_y_float, centroid_x_float = prop.centroid
-        # Convert to int for indexing masks
-        centroid_y, centroid_x = int(round(centroid_y_float)), int(round(centroid_x_float))
-
-        # Ensure centroid is within bounds of the tumor_cell_mask_patch
-        if not (0 <= centroid_y < tumor_cell_mask_patch.shape[0] and \
-                0 <= centroid_x < tumor_cell_mask_patch.shape[1]):
-            logger.debug(f"Centroid ({centroid_y},{centroid_x}) for label {label} is outside tumor_cell_mask_patch bounds. Skipping.")
-            continue
-
-        # --- TUMOR MASK CHECK ---
-        if tumor_cell_mask_patch[centroid_y, centroid_x] == 0: # Assuming tumor mask is 0 (stroma/bg) or 1 (tumor)
-            # logger.debug(f"Nucleus label {label} centroid ({centroid_y},{centroid_x}) is NOT in tumor mask. Skipping.")
-            # Optionally mark these in labels_classified with a different value if needed later, e.g., 3 for non-tumor nucleus
-            # For now, they remain 0 (background) in labels_classified.
-            continue
-        # -------------------------
-
-        # If we reach here, the nucleus is within the tumor mask
-        all_tumor_nuclei_centroids.append((centroid_y_float, centroid_x_float)) # Store float centroid
+        all_tumor_nuclei_centroids.append((centroid_y_float, centroid_x_float))
         total_tumor_nuclei_count += 1
 
         min_r, min_c, max_r, max_c = prop.bbox
-        min_r, min_c = max(0, min_r), max(0, min_c)
-        max_r, max_c = min(labels_filtered_int.shape[0], max_r), min(labels_filtered_int.shape[1], max_c)
-        if min_r >= max_r or min_c >= max_c:
-             logger.warning(f"Invalid bbox for tumor nucleus label {label}. Marking as DAB-.");
-             labels_classified[labels_filtered_int == label] = 1; continue
-
         nucleus_patch_rgb_bbox = hs_patch_rgb[min_r:max_r, min_c:max_c]
         nucleus_mask_in_bbox = (labels_filtered_int[min_r:max_r, min_c:max_c] == label)
 
-        if nucleus_patch_rgb_bbox.size == 0 or nucleus_mask_in_bbox.size == 0 or np.sum(nucleus_mask_in_bbox) == 0:
-            logger.warning(f"Empty patch/mask for tumor nucleus label {label}. Marking as DAB-.");
-            labels_classified[labels_filtered_int == label] = 1; continue
+        if nucleus_patch_rgb_bbox.size == 0:
+            labels_classified[labels_filtered_int == label] = 1 # Mark as negative on error
+            continue
 
         try:
-            if nucleus_patch_rgb_bbox.ndim == 2: nucleus_patch_rgb_bbox = np.stack([nucleus_patch_rgb_bbox]*3, axis=-1)
-            elif nucleus_patch_rgb_bbox.shape[-1] != 3:
-                 logger.warning(f"Nucleus patch for label {label} has {nucleus_patch_rgb_bbox.shape[-1]} channels. Marking as DAB-.");
-                 labels_classified[labels_filtered_int == label] = 1; continue
-
             dab_mask_in_bbox = get_dab_mask(nucleus_patch_rgb_bbox, dab_threshold)
-            if dab_mask_in_bbox is None or dab_mask_in_bbox.shape != nucleus_mask_in_bbox.shape:
-                 logger.warning(f"DAB mask invalid/mismatch for label {label}. Marking as DAB-.");
-                 labels_classified[labels_filtered_int == label] = 1; continue
-
             dab_positive_pixels_in_nucleus = (dab_mask_in_bbox.astype(bool) & nucleus_mask_in_bbox).sum()
             total_nucleus_pixels = nucleus_mask_in_bbox.sum()
             dab_positive_ratio = dab_positive_pixels_in_nucleus / total_nucleus_pixels if total_nucleus_pixels > 0 else 0
@@ -259,7 +177,7 @@ def classify_labels_by_dab(
             if np.any(nucleus_mask_global): labels_classified[nucleus_mask_global] = 1
             continue
 
-    logger.debug(f"Classified TUMOR nuclei: {total_tumor_nuclei_count} total, {ki67_positive_tumor_nuclei_count} positive.")
+    logger.debug(f"Classified tumor nuclei: {total_tumor_nuclei_count} total, {ki67_positive_tumor_nuclei_count} positive.")
     return (labels_classified, ki67_positive_tumor_nuclei_count, total_tumor_nuclei_count,
             positive_tumor_nuclei_centroids, all_tumor_nuclei_centroids)
 
@@ -281,8 +199,6 @@ def predict_patch_stardist(model, image_patch_rgb, tumor_cell_patch, actual_pixe
                Returns (None, None) on error during prediction or critical processing.
     """
 
-
-    # --- Define Prediction Parameters ---
     probability_threshold = 0.1
     nms_overlap_threshold = 0.3
     target_pixel_size = 0.5  
@@ -301,7 +217,6 @@ def predict_patch_stardist(model, image_patch_rgb, tumor_cell_patch, actual_pixe
     img_to_process = img_as_float(image_gray)
     img_to_process = 1.0 - img_to_process
 
-    # --- Rescaling Logic ---
     rescaled_tumor_cell_patch = tumor_cell_patch.astype(np.uint8) 
     rescale_factor = 1.0
 
@@ -716,7 +631,8 @@ def refine_hotspot_with_stardist(
         'stardist_proliferation_index': dab_pos_count / final_total_tumor_cell_nuclei if final_total_tumor_cell_nuclei > 0 else 0.0,
         'positive_centroids': pos_centroids,
         'all_centroids': all_centroids,
-        'stardist_labels': final_labels_filtered
+        'stardist_labels': final_labels_filtered,
+        'classified_labels_dab_hs': classified_labels_dab
     })
 
     logger.info(

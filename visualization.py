@@ -221,8 +221,8 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                 logger.error(f"Error resizing masks for hotspot internal drawing: {e_resize_hs}")
                 return
 
-            sd_color_dab_pos_bgr = (0, 255, 0)  
-            sd_color_dab_neg_bgr = (255, 0, 0)  
+            sd_color_dab_pos_bgr = (0, 0, 255)  # Red for Positive
+            sd_color_dab_neg_bgr = (0, 255, 0)  # Green for Negative
 
             unique_sd_ids = np.unique(stardist_labels_hs[stardist_labels_hs != 0])
             for sd_id in unique_sd_ids:
@@ -314,7 +314,6 @@ def generate_overlay(slide, overlay_level, hotspot_level,
         else:
             overlay_bgr = temp_outline_drawing_layer
 
-
         # 4. Hotspots with internal StarDist details and text with background
         if hotspots:
             logger.info(f"Drawing {len(hotspots)} hotspots...")
@@ -333,8 +332,6 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                     logger.warning(f"Skipping hotspot {i+1} due to zero/negative clamped dimensions for drawing.")
                     continue
 
-                hs_col = hotspot_box_colors[i % len(hotspot_box_colors)]
-                
                 # 1. Get the region of interest (ROI) from the *original* base image (provides a clean background)
                 original_base_roi = overlay_rgb_original[y_ol_clamped : y_ol_clamped + h_ol_clamped, x_ol_clamped : x_ol_clamped + w_ol_clamped]
                 
@@ -351,6 +348,7 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                 overlay_bgr[y_ol_clamped : y_ol_clamped + h_ol_clamped, x_ol_clamped : x_ol_clamped + w_ol_clamped] = clean_bgr_roi_for_drawing
                 
                 # 5. Finally, draw the semi-transparent hotspot box ON TOP of everything
+                hs_col = hotspot_box_colors[i % len(hotspot_box_colors)]
                 if w_ol_clamped > 0 and h_ol_clamped > 0:
                     hotspot_box_region_to_draw_on = overlay_bgr[y_ol_clamped : y_ol_clamped + h_ol_clamped, x_ol_clamped : x_ol_clamped + w_ol_clamped]
                     if hotspot_box_region_to_draw_on.size > 0:
@@ -362,7 +360,7 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                                                              hotspot_box_region_to_draw_on, 1 - outline_alpha, 0)
                         overlay_bgr[y_ol_clamped : y_ol_clamped + h_ol_clamped,
                                     x_ol_clamped : x_ol_clamped + w_ol_clamped] = blended_box_region
-            
+        
 
                 # Hotspot Text with Background
                 pi = hotspot_data.get('stardist_proliferation_index')
@@ -422,19 +420,16 @@ def generate_overlay(slide, overlay_level, hotspot_level,
             cv2.putText(img, txt, (lx + bs + 10, y_pos + toy), font, font_scale_legend, (220,220,220), lbl_thick, cv2.LINE_AA)
             return y_pos + ls
 
-        # Define legend_items BGR colors
         legend_items = [
             (tissue_color, "Tissue Outline", True, tissue_color),
             (tumor_color, "Tumor Outline", True, tumor_color),
-            (cell_region_fill_color, "Tumor Cell Region", False), # Light Yellow (BGR: 255,255,150 if original was RGB)
-            (dab_intersect_cell_border_color, "DAB+ in Tumor Cell Mask (Border)", True, dab_intersect_cell_border_color), # Bright Red
-            (dab_intersect_cell_fill_color, "DAB+ in Tumor Cell Mask (Fill)", False), # Dark Red
-            (hotspot_box_colors[0], "Hotspot Region (Example)", True, hotspot_box_colors[0]), # Also an outline now
-            ((0,0,255), "DAB+ StarDist Cells (in HS)", False), # BGR Blue for fill
-            ((0,255,0), "DAB- StarDist Cells (in HS)", False)  # BGR Green for fill
+            (cell_region_fill_color, "Tumor Cell Region", False), 
+            (dab_intersect_cell_border_color, "DAB+ in Tumor Cell Mask (Border)", True, dab_intersect_cell_border_color), 
+            (dab_intersect_cell_fill_color, "DAB+ in Tumor Cell Mask (Fill)", False), 
+            (hotspot_box_colors[0], "Hotspot Region (Example)", True, hotspot_box_colors[0]), 
+            ((0, 0, 255), "DAB+ StarDist Cells (in HS)", False), 
+            ((0, 255, 0), "DAB- StarDist Cells (in HS)", False)  
         ]
-        # Update hotspot legend item to reflect its outline nature for display color
-        # This assumes hotspot_box_colors are BGR tuples.
 
         for item_props in legend_items:
             color_val, text_val = item_props[0], item_props[1]
