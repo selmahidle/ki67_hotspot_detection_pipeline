@@ -11,7 +11,7 @@ from skimage.util import img_as_float, img_as_ubyte
 from skimage.transform import resize
 import warnings
 import matplotlib.pyplot as plt
-from stain_utils import get_dab_mask # Assuming this function exists and works as expected
+from stain_utils import get_dab_mask
 
 logger = logging.getLogger(__name__)
 

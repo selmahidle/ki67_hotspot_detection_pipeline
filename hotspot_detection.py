@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 def identify_hotspots(slide, level, hotspot_target_mask,
-                      hotspot_patch_size_l0=2048, top_n_hotspots=5, debug_dir=None):
+                      hotspot_patch_size_l0=2048, top_n_hotspots=7, debug_dir=None):
     """
     Identifies hotspots based on the density of positive pixels within a
     pre-calculated binary target mask (e.g., DAB+ cells within tumor).

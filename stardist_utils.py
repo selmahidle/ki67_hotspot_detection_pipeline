@@ -230,7 +230,7 @@ def predict_patch_stardist(model, image_patch_rgb, tumor_cell_patch, actual_pixe
         original_height, original_width = img_to_process.shape 
         new_height_img = int(original_height * rescale_factor)
         new_width_img = int(original_width * rescale_factor)
-        max_dimension = 1500 
+        max_dimension = 15000 
 
         if new_height_img > max_dimension or new_width_img > max_dimension:
             logger.warning(f"\tImage rescaling would create image of size {new_width_img}x{new_height_img}, which exceeds maximum {max_dimension}x{max_dimension}. Skipping image rescaling.")
@@ -459,7 +459,7 @@ def refine_hotspot_with_stardist(
     candidate_hotspot, slide, stardist_model, hotspot_level,
     actual_pixel_size_um, tumor_cell_mask_l2, debug_dir=None, candidate_index=0,
     dab_threshold=0.15, min_dab_positive_ratio=0.1,
-    min_cells=500, max_cells=600, max_iterations=50, resize_factor=0.15
+    min_cells=500, max_cells=600, max_iterations=25, resize_factor=0.15
 ):
     func_name = 'refine_hotspot_with_stardist'
     hotspot = candidate_hotspot.copy()
