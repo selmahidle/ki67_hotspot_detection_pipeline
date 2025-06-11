@@ -7,10 +7,8 @@ import torch
 from PIL import Image
 from model_utils import (
     create_model,
-    # load_latest_checkpoint, # Not directly used for single model loading here
-    # load_models_from_subdirs, # Not used for tumor model anymore
     create_and_load_attention_unet,
-    load_model_checkpoint # <-- IMPORT THIS for loading the tumor model
+    load_model_checkpoint
 )
 from pipeline import process_slide_ki67
 from datetime import datetime
