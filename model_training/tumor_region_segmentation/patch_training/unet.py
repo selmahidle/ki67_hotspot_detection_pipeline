@@ -2,7 +2,7 @@
 UNet training script for semantic segmentation of tumor region in 1024x1024 WSI patches (tested on 4096x4096 patches)
 """
 
-from tumor_patch_preprocessing import get_dataloaders
+from preprocessing import get_dataloaders
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -22,7 +22,7 @@ from monai.metrics import DiceMetric
 from monai.transforms import Compose, Activations, AsDiscrete, LoadImaged, EnsureChannelFirstd, ScaleIntensityd, ToTensord
 from monai.inferers import SlidingWindowInferer
 from monai.data import Dataset as MonaiDataset, DataLoader as MonaiDataLoader 
-from tumor_patch_preprocessing import test_files as full_image_test_files
+from preprocessing import test_files as full_image_test_files
 
 
 SEED = 42

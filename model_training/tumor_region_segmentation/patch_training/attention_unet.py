@@ -1,5 +1,5 @@
 """
-Swin UNETR training script for semantic segmentation of tumor in 1024x1024 WSI patches (tested on full 4096x4096 patches)
+Attention U-Net trained for semantic segmentation of tumor in WSIs
 """
 
 from preprocessing import get_dataloaders
@@ -15,8 +15,8 @@ from sklearn.metrics import confusion_matrix
 import seaborn as sns
 import matplotlib.pyplot as plt
 import psutil
-import os
-from monai.networks.nets import SwinUNETR
+import os 
+from monai.networks.nets import AttentionUnet
 from monai.losses import TverskyLoss
 from monai.metrics import DiceMetric
 from monai.transforms import Compose, Activations, AsDiscrete, LoadImaged, EnsureChannelFirstd, ScaleIntensityd, ToTensord
@@ -26,6 +26,7 @@ from preprocessing import test_files as full_image_test_files
 
 
 SEED = 42
+
 random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
@@ -39,7 +40,6 @@ parser.add_argument("--slurm_job_id", type=int, default=None, help="Slurm job ID
 parser.add_argument("--comment", type=str, default=None, help="Comment")
 args = parser.parse_args()
 
-
 run = wandb.init(
     entity="selma_mib",
     project="Tumor Segmentation",
@@ -49,7 +49,7 @@ run = wandb.init(
             "epochs": args.num_epochs,
             "batch_size": args.batch_size,
             "optimizer": "Adam",
-            "model_architecture": "Swin UNETR",
+            "model_architecture": "AttentionUnet",
             "loss_function": "Tversky",
             "slurm_job_id": args.slurm_job_id
         })
@@ -64,16 +64,17 @@ def log_memory(stage):
 
     print(f"[{stage}] GPU allocated: {gpu_allocated:.2f} GB | GPU reserved: {gpu_reserved:.2f} GB | RAM usage: {ram_usage}%")
 
-
 """
 Define the model, loss function and optimizer
 """
-model = SwinUNETR(
-    img_size=(4096, 4096),
+model = AttentionUnet(
+    spatial_dims=2,
     in_channels=3,
     out_channels=1,
-    feature_size=24,
-    spatial_dims=2
+    channels=(32, 64, 128, 256, 512, 1024),
+    strides=(2, 2, 2, 2, 2),
+    kernel_size=3,
+    up_kernel_size=3
 ).to(device)
 
 wandb.watch(model, log='all', log_freq=100)
@@ -85,6 +86,16 @@ dice_metric = DiceMetric()
 post_trans = Compose([Activations(sigmoid=True), AsDiscrete(threshold=0.5)])
 
 
+""" 
+    He initialization
+"""
+def initialize_weights(module):
+    if isinstance(module, (nn.Conv2d, nn.Linear)):
+        nn.init.kaiming_normal_(module.weight, nonlinearity='leaky_relu')
+
+model.apply(initialize_weights)
+
+
 """
 Training and validation loop
 """
@@ -94,6 +105,7 @@ best_metric_epoch = -1
 
 for epoch in range(args.num_epochs):
     print(f"\n---Epoch {epoch + 1}/{args.num_epochs}---")
+    log_memory("Epoch Start")
     model.train()
     epoch_loss = 0
     step = 0
@@ -129,7 +141,7 @@ for epoch in range(args.num_epochs):
             dice_metric(y_pred=transformed_val_outputs, y=val_masks)
             dice_score = dice_metric.aggregate().item()
             val_dice_scores.append(dice_score)
-            dice_metric.reset()      
+            dice_metric.reset()
 
         avg_dice_value = sum(val_dice_scores) / len(val_dice_scores)
         epochs_sum_val_loss /= len(val_loader)
@@ -143,22 +155,24 @@ for epoch in range(args.num_epochs):
         lr_scheduler.step(epochs_sum_val_loss) 
         current_lr = lr_scheduler.get_last_lr()[0] 
         wandb.log({"learning_rate": current_lr, "epoch": epoch})
-        dice_metric.reset()
+
 
         if avg_dice_value > best_metric:
             best_metric = avg_dice_value
             best_metric_epoch = epoch + 1
-            checkpoint_filename = f"/cluster/home/selmahi/mib_pipeline_scripts/checkpoints/tumor_swinunetr/{args.slurm_job_id}_best_tumor_semseg_swinunetr_model.pth"
+            checkpoint_filename = f"/cluster/home/selmahi/mib_pipeline_scripts/checkpoints/tumor_attention_unet/{args.slurm_job_id}_best_tumor_semseg_attention_unet_model_with_patching.pth"
             torch.save(model.state_dict(), checkpoint_filename)
 
 del val_inputs, val_masks, val_outputs, inputs, masks, outputs, loss, val_loss
 torch.cuda.empty_cache()
+
 print(f"Training Complete. Best Dice Score: {best_metric:.4f} at Epoch: {best_metric_epoch}")
 
 
 """
 Testing the model on FULL 4096x4096 patches
 """
+
 if os.path.exists(checkpoint_filename) and best_metric > -1 :
     print(f"\nLoading best model from epoch {best_metric_epoch} for testing: {checkpoint_filename}")
     model.load_state_dict(torch.load(checkpoint_filename, map_location=device))
@@ -166,8 +180,9 @@ else:
     print("\nWARNING: No best model checkpoint found or training did not improve. Testing with the model from the last epoch.")
 model.to(device) 
 model.eval()
-
 print("\nTesting the model on full 4096x4096 images...")
+
+
 full_image_test_transform = Compose([
     LoadImaged(keys=["image", "mask"], reader="pilreader", image_only=False),
     EnsureChannelFirstd(keys=["image", "mask"]),
@@ -179,15 +194,15 @@ full_image_test_ds = MonaiDataset(data=full_image_test_files, transform=full_ima
 full_image_test_loader = MonaiDataLoader(full_image_test_ds, batch_size=1, shuffle=False, num_workers=0)
 
 patch_roi_size = (1024, 1024)
-sw_batch_size = 4            
-overlap_ratio = 0.5          
+sw_batch_size = 4           
+overlap_ratio = 0.5         
 
 inferer = SlidingWindowInferer(
     roi_size=patch_roi_size,
     sw_batch_size=sw_batch_size,
     overlap=overlap_ratio,
-    mode="gaussian",
-    sigma_scale=0.2,
+    mode="gaussian", 
+    sigma_scale=0.2, 
     padding_mode="constant",
     cval=0,
     progress=True
@@ -195,17 +210,17 @@ inferer = SlidingWindowInferer(
 
 
 dice_metric.reset()
-cm_total_full = np.zeros((2, 2), dtype=int) 
+cm_total_full = np.zeros((2, 2), dtype=int)
 full_image_dice_scores = []
 
 columns_full = ["Original Image Filename", "Full Input Image (Resized)", "Full Ground Truth (Resized)", "Full Prediction (Resized)", "Full Image Dice Score"]
 table_full = wandb.Table(columns=columns_full)
-num_images_to_log_full = 5
+num_images_to_log_full = 5 
 
 with torch.no_grad():
     for idx, full_test_data_item in enumerate(full_image_test_loader):
-        full_inputs = full_test_data_item["image"].to(device) 
-        full_masks = full_test_data_item["mask"].to(device)   
+        full_inputs = full_test_data_item["image"].to(device)
+        full_masks = full_test_data_item["mask"].to(device) 
         original_filename = full_test_data_item["image_meta_dict"]["filename_or_obj"][0] 
         
         print(f"Inferring on full image {idx+1}/{len(full_image_test_loader)}: {os.path.basename(original_filename)}")
@@ -213,7 +228,7 @@ with torch.no_grad():
         full_outputs_logits = inferer(inputs=full_inputs, network=model)
         full_outputs_pred = post_trans(full_outputs_logits)
 
-        dice_metric.reset()
+        dice_metric.reset() 
         dice_metric(y_pred=full_outputs_pred, y=full_masks)
         current_full_image_dice = dice_metric.aggregate().item()
         full_image_dice_scores.append(current_full_image_dice)
@@ -238,10 +253,10 @@ with torch.no_grad():
         if 20 <= idx < 31:
             display_size = (1024, 1024)
             
-            input_img_np = full_inputs[0].cpu().permute(1, 2, 0).numpy() 
+            input_img_np = full_inputs[0].cpu().permute(1, 2, 0).numpy()
             resized_input_wandb = cv2.resize(input_img_np, display_size, interpolation=cv2.INTER_AREA)
             
-            gt_mask_np = full_masks[0].squeeze().cpu().numpy() 
+            gt_mask_np = full_masks[0].squeeze().cpu().numpy()
             resized_gt_wandb = cv2.resize(gt_mask_np, display_size, interpolation=cv2.INTER_NEAREST)
             
             pred_mask_np = full_outputs_pred[0].squeeze().cpu().numpy() 
