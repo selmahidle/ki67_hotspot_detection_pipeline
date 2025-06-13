@@ -2,7 +2,7 @@
 Swin UNETR training script for semantic segmentation of tumor in 4096x4096 WSI patches
 """
 
-from tumor_patch_preprocessing import get_dataloaders
+from preprocessing import get_dataloaders
 from monai.networks.nets import SwinUNETR
 from monai.losses import TverskyLoss
 from monai.metrics import DiceMetric
