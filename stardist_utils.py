@@ -10,7 +10,7 @@ import os
 import traceback
 from skimage.util import img_as_ubyte, img_as_float
 from skimage.transform import resize, rescale
-from skimage.measure import regionprops
+from skimage.measure import regionprops, label
 import sys
 import numpy as np
 import logging
@@ -19,29 +19,34 @@ from stain_utils import get_dab_mask
 
 logger = logging.getLogger(__name__)
 
+def _get_mask_centroid(mask: np.ndarray):
+    """Helper to find the centroid of the largest component in a binary mask."""
+    if mask is None or not np.any(mask):
+        return None
+    labeled_mask = label(mask.astype(np.uint8), connectivity=2)
+    props = regionprops(labeled_mask)
+    if not props:
+        return None
+    total_area = 0
+    sum_y = 0
+    sum_x = 0
+    for prop in props:
+        sum_y += prop.centroid[0] * prop.area
+        sum_x += prop.centroid[1] * prop.area
+        total_area += prop.area
+    if total_area == 0:
+        return None
+    return (sum_y / total_area, sum_x / total_area)
+
+
 def extract_aligned_mask_patch(
     full_mask: np.ndarray,
-    top_left_coords_in_full_mask: tuple, # (x, y) coordinates at the full_mask's level
-    target_patch_shape: tuple             # (height, width) of the desired output patch
+    top_left_coords_in_full_mask: tuple, 
+    target_patch_shape: tuple            
 ) -> np.ndarray:
     """
     Extracts a patch from a full mask, ensuring it aligns with a target shape
     defined by top-left coordinates and dimensions. Handles boundary conditions.
-
-    Args:
-        full_mask (np.ndarray): The large 2D mask from which to extract.
-        top_left_coords_in_full_mask (tuple): (x, y) top-left coordinates
-                                              for the patch extraction, relative
-                                              to the full_mask.
-        target_patch_shape (tuple): Desired (height, width) of the output patch.
-                                    This typically matches the shape of an RGB
-                                    image patch extracted using the same coordinates
-                                    and target dimensions.
-
-    Returns:
-        np.ndarray: The extracted mask patch, with the same dtype as full_mask.
-                    It will have dimensions specified by target_patch_shape.
-                    Areas outside full_mask bounds will be 0.
     """
     coord_x, coord_y = top_left_coords_in_full_mask
     target_h, target_w = target_patch_shape
@@ -119,8 +124,6 @@ def classify_labels_by_dab(
 ) -> tuple:
     """
     Classify StarDist-detected nuclei as DAB- or DAB+ based on staining.
-    It is ASSUMED that labels_filtered has ALREADY been filtered to only include
-    nuclei within the desired tumor region.
     """
 
     if labels_filtered is None or hs_patch_rgb is None or tumor_cell_mask_patch is None:
@@ -155,7 +158,7 @@ def classify_labels_by_dab(
         nucleus_mask_in_bbox = (labels_filtered_int[min_r:max_r, min_c:max_c] == label)
 
         if nucleus_patch_rgb_bbox.size == 0:
-            labels_classified[labels_filtered_int == label] = 1 # Mark as negative on error
+            labels_classified[labels_filtered_int == label] = 1
             continue
 
         try:
@@ -193,10 +196,11 @@ def predict_patch_stardist(model, image_patch_rgb, tumor_cell_patch, actual_pixe
         actual_pixel_size_um (float): Actual pixel size of the input patch (microns).
 
     Returns:
-        tuple: (labels_filtered, details) containing:
+        tuple: (labels_filtered, details, n_objects_after_filter) containing:
                  - labels_filtered (np.ndarray | None): Filtered label image (uint16).
                  - details (dict | None): Details dictionary from predict_instances.
-               Returns (None, None) on error during prediction or critical processing.
+                 - n_objects_after_filter (int): Count of objects after all filtering.
+               Returns (None, None, 0) on error.
     """
 
     probability_threshold = 0.1
@@ -213,7 +217,6 @@ def predict_patch_stardist(model, image_patch_rgb, tumor_cell_patch, actual_pixe
         logger.error(f"\tUnsupported image_patch_rgb shape: {image_patch_rgb.shape}. Expected 2D or 3D with 3 channels.")
         return None, None, 0
 
-    # Invert the image for the fluorescence model
     img_to_process = img_as_float(image_gray)
     img_to_process = 1.0 - img_to_process
 
@@ -299,8 +302,6 @@ def predict_patch_stardist(model, image_patch_rgb, tumor_cell_patch, actual_pixe
                     )
                  rescaled_tumor_cell_patch = (rescaled_tumor_cell_patch > 0.5).astype(np.uint8)
 
-
-    # --- Normalization ---
     try:
         img_norm = normalize(img_to_process, 1.0, 99.0, axis=(0, 1)) 
         logger.debug(f"\tNormalization complete. Normalized image shape: {img_norm.shape}")
@@ -309,38 +310,34 @@ def predict_patch_stardist(model, image_patch_rgb, tumor_cell_patch, actual_pixe
             img_norm,
             prob_thresh=probability_threshold,
             nms_thresh=nms_overlap_threshold,
-            scale=None, # Already handled rescaling manually if needed
-            return_predict=False # We don't need the intermediate probability maps here
+            scale=None,
+            return_predict=False
         )
         n_objects = labels_pred_scaled.max()
         logger.info(f"\tStarDist found {n_objects} raw objects (prob_thresh={probability_threshold}).")
 
     except Exception as e:
         logger.error(f"\tError during StarDist prediction: {e}", exc_info=True)
-        return None, None
+        return None, None, 0
 
-    # --- Validation of Predicted Labels ---
     if not isinstance(labels_pred_scaled, np.ndarray):
         logger.error(f"\tPredicted labels are not a numpy array (type: {type(labels_pred_scaled)}). Cannot proceed.")
-        return None, None, 0 # Also return 0 for count
+        return None, None, 0 
     if labels_pred_scaled.ndim != 2:
         logger.error(f"\tPredicted labels have unexpected dimensions ({labels_pred_scaled.ndim}). Expected 2. Cannot proceed.")
-        return None, None, 0 # Also return 0 for count
+        return None, None, 0
 
-    # --- Filter StarDist labels based on rescaled_tumor_cell_patch ---
     if rescaled_tumor_cell_patch is not None and rescaled_tumor_cell_patch.shape == labels_pred_scaled.shape:
         logger.info("\tApplying tumor_cell_patch filter to StarDist labels...")
         props = regionprops(labels_pred_scaled)
         labels_to_remove = []
 
         for prop in props:
-            # Check if centroid of the nucleus is within the tumor cell mask region
             centroid_y, centroid_x = int(prop.centroid[0]), int(prop.centroid[1])
             
-            # Boundary check for centroid
             if not (0 <= centroid_y < rescaled_tumor_cell_patch.shape[0] and \
                     0 <= centroid_x < rescaled_tumor_cell_patch.shape[1]):
-                labels_to_remove.append(prop.label) # Remove if centroid is out of bounds
+                labels_to_remove.append(prop.label) 
                 continue
 
             if rescaled_tumor_cell_patch[centroid_y, centroid_x] == 0:
@@ -348,61 +345,55 @@ def predict_patch_stardist(model, image_patch_rgb, tumor_cell_patch, actual_pixe
         
         if labels_to_remove:
             logger.info("\tRemoving {len(labels_to_remove)} StarDist objects outside tumor_cell_patch.")
-            # Create a boolean mask for efficient removal
             mask_to_remove = np.isin(labels_pred_scaled, labels_to_remove)
             labels_pred_scaled[mask_to_remove] = 0
-            # Update n_objects (the count of actual objects)
             n_objects = len(np.unique(labels_pred_scaled)) - 1 if 0 in np.unique(labels_pred_scaled) else len(np.unique(labels_pred_scaled))
-            if n_objects < 0: n_objects = 0 # Ensure non-negative
+            if n_objects < 0: n_objects = 0 
             logger.info(f"\tNumber of objects after tumor_cell_patch filtering: {n_objects}")
         else:
             logger.info("\tNo StarDist objects needed removal based on tumor_cell_patch.")
     elif rescaled_tumor_cell_patch is None:
         logger.warning("\trescaled_tumor_cell_patch is None. Skipping filtering based on it.")
-    else: # Shape mismatch
+    else:
         logger.warning(f"\tShape mismatch: rescaled_tumor_cell_patch {rescaled_tumor_cell_patch.shape} vs labels_pred_scaled {labels_pred_scaled.shape}. Skipping filtering.")
 
-
-    # --- Resize Label Mask Back to Original Image Size (if needed) ---
     labels_pred = None
-    original_shape = image_patch_rgb.shape[:2] # Target shape
+    original_shape = image_patch_rgb.shape[:2]
 
-    if abs(rescale_factor - 1.0) > 1e-6: # Check if rescaling *was* applied
+    if abs(rescale_factor - 1.0) > 1e-6: 
         logger.debug(f"\tResizing predicted labels from {labels_pred_scaled.shape} back to original shape {original_shape}...")
         try:
             labels_pred = resize(
                 labels_pred_scaled,
                 output_shape=original_shape,
-                order=0, # Nearest neighbor for labels
+                order=0, 
                 preserve_range=True,
                 anti_aliasing=False
             )
             labels_pred = labels_pred.astype(np.uint16)
         except Exception as resize_err:
             logger.error(f"\tError resizing labels back to original size: {resize_err}", exc_info=True)
-            return None, None # Return None if resizing fails, as labels won't match original image
+            return None, None, 0 
     else:
         logger.debug("\tNo input rescaling was applied, using predicted labels directly (checking shape).")
         if labels_pred_scaled.shape != original_shape:
             logger.warning(f"\tPredicted label shape {labels_pred_scaled.shape} differs from original image shape {original_shape} even without rescaling. Attempting corrective resize.")
             try:
                 labels_pred = resize(labels_pred_scaled, output_shape=original_shape, order=0, preserve_range=True, anti_aliasing=False)
+                labels_pred = labels_pred.astype(np.uint16)
             except Exception as resize_err:
                 logger.error(f"\tError during corrective resize: {resize_err}", exc_info=True)
-                return None, None # Fail if corrective resize fails
+                return None, None, 0 
         else:
-            labels_pred = labels_pred_scaled # Shapes match, use directly
+            labels_pred = labels_pred_scaled
         labels_pred = labels_pred.astype(np.uint16)
 
 
-    # --- Post-processing: Dynamic Size Filtering (based on physical size) ---
     logger.info(f"\tApplying dynamic size filtering to labels at original resolution ({labels_pred.shape})...")
     labels_pred_filtered = labels_pred.copy()
 
-    # Define physical size thresholds in micrometers
-    min_cell_diameter_um = 4.0    # Minimum expected cell diameter (e.g., lymphocytes, small tumor cells)
-    max_cell_diameter_um = 40.0   # Maximum reasonable cell diameter (e.g., large tumor cells, not clumps)
-                                  # Script 2 had 50um, but 35um might be more typical for individual nuclei. Adjust as needed.
+    min_cell_diameter_um = 4.0    
+    max_cell_diameter_um = 40.0   
 
     if actual_pixel_size_um is None or actual_pixel_size_um <= 0:
         logger.warning(f"\tCannot perform dynamic size filtering: actual_pixel_size_um is invalid ({actual_pixel_size_um}). Skipping this filter.")
@@ -418,7 +409,7 @@ def predict_patch_stardist(model, image_patch_rgb, tumor_cell_patch, actual_pixe
         logger.info(f"\t  - Min physical cell diameter: {min_cell_diameter_um:.1f} µm  -> Min area: {min_area_pixels:.1f} pixels")
         logger.info(f"\t  - Max physical cell diameter: {max_cell_diameter_um:.1f} µm  -> Max area: {max_area_pixels:.1f} pixels")
 
-        num_labels_before_dynamic_filter = labels_pred.max() # Max label ID
+        num_labels_before_dynamic_filter = labels_pred.max() 
         
         if num_labels_before_dynamic_filter > 0:
             object_labels, object_sizes_pixels = np.unique(labels_pred[labels_pred > 0], return_counts=True)
@@ -428,7 +419,6 @@ def predict_patch_stardist(model, image_patch_rgb, tumor_cell_patch, actual_pixe
                             f"\tmin={np.min(object_sizes_pixels)}, max={np.max(object_sizes_pixels)}, "
                             f"\tmean={np.mean(object_sizes_pixels):.1f}, median={np.median(object_sizes_pixels):.1f}")
 
-                # Identify labels for objects that are too small or too large
                 labels_too_small = object_labels[object_sizes_pixels < min_area_pixels]
                 labels_too_large = object_labels[object_sizes_pixels > max_area_pixels]
 
@@ -463,30 +453,38 @@ def refine_hotspot_with_stardist(
 ):
     func_name = 'refine_hotspot_with_stardist'
     hotspot = candidate_hotspot.copy()
+    full_mask_h, full_mask_w = tumor_cell_mask_l2.shape
 
-    size_w, size_h = hotspot['size_level']
-    coords_x, coords_y = hotspot['coords_level']
-    iteration = 0
+    initial_w, initial_h = hotspot['size_level']
+    initial_x, initial_y = hotspot['coords_level']
+    center_x = initial_x + initial_w / 2.0
+    center_y = initial_y + initial_h / 2.0
+    current_target_size_w = float(initial_w)
+    current_target_size_h = float(initial_h)
 
-    # --- Initialize variables to store results from the "best" or last valid iteration ---
     final_hs_patch_rgb = None
-    final_labels_filtered = None # This will be already filtered by tumor_cell_patch
-    final_corresponding_tumor_cell_patch = None # The mask patch that aligned with final_hs_patch_rgb
-    final_refined_nuclei_count = 0 # Count of nuclei after tumor_cell_patch filtering
-    # Keep track of the target FoV sizes for logging/reporting
-    current_target_size_w = float(hotspot['size_level'][0])
-    current_target_size_h = float(hotspot['size_level'][1])
+    final_labels_filtered = None
+    final_corresponding_tumor_cell_patch = None
+    final_refined_nuclei_count = 0
+    final_coords_x, final_coords_y = initial_x, initial_y 
 
     iteration = 0
     while iteration < max_iterations:
-        # Target size for this iteration's extraction (use current_target_size_w/h)
+        coords_x = int(round(center_x - current_target_size_w / 2.0))
+        coords_y = int(round(center_y - current_target_size_h / 2.0))
+
+        coords_x = np.clip(coords_x, 0, full_mask_w - 1)
+        coords_y = np.clip(coords_y, 0, full_mask_h - 1)
+
         target_w_int = int(round(current_target_size_w))
         target_h_int = int(round(current_target_size_h))
 
-        # Prevent zero or negative sizes for extraction
+        target_w_int = min(target_w_int, full_mask_w - coords_x)
+        target_h_int = min(target_h_int, full_mask_h - coords_y)
+
         target_w_int = max(1, target_w_int)
         target_h_int = max(1, target_h_int)
-
+        
         logger.debug(f"[{func_name}] Cand {candidate_index+1}, Iter {iteration+1}: "
                      f"Attempting FoV with target size ({target_w_int}x{target_h_int}) at ({coords_x},{coords_y})")
 
@@ -495,63 +493,61 @@ def refine_hotspot_with_stardist(
         )
 
         if hs_patch_rgb is None or hs_patch_rgb.size == 0:
-            logger.warning(f"[{func_name}] Cand {candidate_index+1}, Iter {iteration+1}: Failed to extract RGB patch. Adjusting FoV.")
-            # Heuristic: if extraction failed, perhaps FoV is too small/large or problematic
-            if current_target_size_w * current_target_size_h < (128*128): # Arbitrary small threshold
-                current_target_size_w *= (1 + resize_factor)
-                current_target_size_h *= (1 + resize_factor)
-            else:
-                current_target_size_w *= (1 - resize_factor)
-                current_target_size_h *= (1 - resize_factor)
-            iteration += 1
-            continue # Try next iteration with adjusted FoV
+            logger.warning(f"[{func_name}] Cand {candidate_index+1}, Iter {iteration+1}: Failed to extract RGB patch. Breaking loop.")
+            break
 
-        # Actual dimensions of the extracted RGB patch
         patch_actual_h, patch_actual_w = hs_patch_rgb.shape[:2]
-        logger.debug(f"[{func_name}] Cand {candidate_index+1}, Iter {iteration+1}: "
-                     f"Extracted RGB patch actual size ({patch_actual_w}x{patch_actual_h})")
 
         extracted_tumor_cell_patch = extract_aligned_mask_patch(
             full_mask=tumor_cell_mask_l2,
             top_left_coords_in_full_mask=(coords_x, coords_y),
-            target_patch_shape=(patch_actual_h, patch_actual_w) # Use actual shape of hs_patch_rgb
+            target_patch_shape=(patch_actual_h, patch_actual_w)
         )
 
-        # current_labels_filtered is already filtered by extracted_tumor_cell_patch
-        # current_n_objects is the count *after* this filtering
         current_labels_filtered, _, current_n_objects = predict_patch_stardist(
             stardist_model, hs_patch_rgb, extracted_tumor_cell_patch, actual_pixel_size_um
         )
-
-        if current_labels_filtered is None: # predict_patch_stardist itself failed
-            logger.warning(f"[{func_name}] Cand {candidate_index+1}, Iter {iteration+1}: predict_patch_stardist failed. Adjusting FoV.")
-            # Heuristic adjustment similar to RGB extraction failure
-            if current_target_size_w * current_target_size_h < (128*128):
-                current_target_size_w *= (1 + resize_factor)
-                current_target_size_h *= (1 + resize_factor)
-            else:
-                current_target_size_w *= (1 - resize_factor)
-                current_target_size_h *= (1 - resize_factor)
+        
+        if current_labels_filtered is None:
+            logger.warning(f"[{func_name}] Cand {candidate_index+1}, Iter {iteration+1}: predict_patch_stardist failed. Adjusting FoV blindly.")
+            current_target_size_w *= (1 - resize_factor) if current_target_size_w > 1024 else (1 + resize_factor)
+            current_target_size_h *= (1 - resize_factor) if current_target_size_h > 1024 else (1 + resize_factor)
             iteration += 1
             continue
 
-        # Store the results of this potentially successful iteration
         final_hs_patch_rgb = hs_patch_rgb
         final_labels_filtered = current_labels_filtered
         final_corresponding_tumor_cell_patch = extracted_tumor_cell_patch
         final_refined_nuclei_count = current_n_objects
+        final_coords_x, final_coords_y = coords_x, coords_y
 
-        nuclei_count_for_loop_logic = final_refined_nuclei_count # Use the refined count
         logger.info(f"[{func_name}] Cand {candidate_index+1}, Iter {iteration+1}: "
-                    f"Found {nuclei_count_for_loop_logic} nuclei (within tumor cell mask). Target FoV ({current_target_size_w:.0f}x{current_target_size_h:.0f})")
+                    f"Found {final_refined_nuclei_count} nuclei. Target FoV ({current_target_size_w:.0f}x{current_target_size_h:.0f})")
 
-        if min_cells <= nuclei_count_for_loop_logic <= max_cells:
-            logger.info(f"[{func_name}] Cand {candidate_index+1}, Iter {iteration+1}: Refined nuclei count ({nuclei_count_for_loop_logic}) in range. Finalizing FoV.")
-            break # Found suitable FoV
-        elif nuclei_count_for_loop_logic < min_cells:
+        if min_cells <= final_refined_nuclei_count <= max_cells:
+            logger.info(f"[{func_name}] Cand {candidate_index+1}, Iter {iteration+1}: Nuclei count in range. Finalizing.")
+            break
+        
+        elif final_refined_nuclei_count < min_cells:
+            nuclei_mask = (current_labels_filtered > 0)
+            centroid_of_nuclei = _get_mask_centroid(nuclei_mask)
+
+            if centroid_of_nuclei:
+                cy, cx = centroid_of_nuclei
+                center_x = coords_x + cx
+                center_y = coords_y + cy
+                logger.debug(f"[{func_name}] Re-centering FoV to nuclei centroid at ({center_x:.1f}, {center_y:.1f})")
+            else:
+                centroid_of_tumor = _get_mask_centroid(extracted_tumor_cell_patch)
+                if centroid_of_tumor:
+                    cy, cx = centroid_of_tumor
+                    center_x = coords_x + cx
+                    center_y = coords_y + cy
+                    logger.debug(f"[{func_name}] No nuclei found. Re-centering to tumor mask centroid at ({center_x:.1f}, {center_y:.1f})")
+
             current_target_size_w *= (1 + resize_factor)
             current_target_size_h *= (1 + resize_factor)
-        else: # nuclei_count_for_loop_logic > max_cells
+        else:
             current_target_size_w *= (1 - resize_factor)
             current_target_size_h *= (1 - resize_factor)
 
@@ -560,61 +556,39 @@ def refine_hotspot_with_stardist(
 
         iteration += 1
         if iteration == max_iterations:
-            logger.warning(f"[{func_name}] Cand {candidate_index+1}: Max iterations reached. Using results from last valid iteration (Iter {iteration}).")
+            logger.warning(f"[{func_name}] Cand {candidate_index+1}: Max iterations reached. Using results from last valid iteration.")
 
     if final_hs_patch_rgb is None or final_labels_filtered is None:
-        logger.error(f"[{func_name}] Cand {candidate_index+1}: No valid patches or labels after FoV adjustment. Cannot proceed with DAB classification.")
+        logger.error(f"[{func_name}] Cand {candidate_index+1}: No valid patches/labels after FoV adjustment. Cannot proceed.")
         hotspot.update({
-            'stardist_total_count_filtered': 0,
-            'stardist_ki67_pos_count': 0,
-            'stardist_proliferation_index': 0.0,
-            'positive_centroids': [],
-            'all_centroids': [],
-            'stardist_labels': None
+            'stardist_total_count_filtered': 0, 'stardist_ki67_pos_count': 0, 'stardist_proliferation_index': 0.0,
+            'positive_centroids': [], 'all_centroids': [], 'stardist_labels': None
         })
-        # Update size_level to the last attempted target FoV for reporting, even if failed
-        # and L0 based on that and initial coords.
-        # (This assumes current_target_size_w/h reflect the last attempt)
         hotspot['size_level'] = (int(round(current_target_size_w)), int(round(current_target_size_h)))
         downsample_hl = slide.level_downsamples[hotspot_level]
         hotspot['coords_l0'] = (int(coords_x * downsample_hl), int(coords_y * downsample_hl))
         hotspot['size_l0'] = (int(hotspot['size_level'][0] * downsample_hl), int(hotspot['size_level'][1] * downsample_hl))
         return hotspot
 
-    # Update hotspot's size_level to reflect the *actual* dimensions of the patch that was processed
-    # and led to final_labels_filtered and final_refined_nuclei_count.
     patch_actual_h_final, patch_actual_w_final = final_hs_patch_rgb.shape[:2]
+    hotspot['coords_level'] = (final_coords_x, final_coords_y)
     hotspot['size_level'] = (patch_actual_w_final, patch_actual_h_final)
 
-    # Recalculate L0 coordinates and size based on initial top-left (coords_x, coords_y)
-    # and the *actual* final patch size stored in hotspot['size_level'].
     downsample_hl = slide.level_downsamples[hotspot_level]
-    hotspot['coords_l0'] = (int(coords_x * downsample_hl), int(coords_y * downsample_hl))
+    hotspot['coords_l0'] = (int(hotspot['coords_level'][0] * downsample_hl), int(hotspot['coords_level'][1] * downsample_hl))
     hotspot['size_l0'] = (int(hotspot['size_level'][0] * downsample_hl), int(hotspot['size_level'][1] * downsample_hl))
 
-
-    if final_refined_nuclei_count == 0: # No nuclei found within the tumor cell mask by predict_patch_stardist
-        logger.warning(f"[{func_name}] Cand {candidate_index+1}: No nuclei detected within tumor cell mask by predict_patch_stardist. Reporting zero Ki67 counts.")
+    if final_refined_nuclei_count == 0:
+        logger.warning(f"[{func_name}] Cand {candidate_index+1}: No nuclei detected in final FoV. Reporting zero counts.")
         hotspot.update({
-            'stardist_total_count_filtered': 0, # This is already the refined count
-            'stardist_ki67_pos_count': 0,
-            'stardist_proliferation_index': 0.0,
-            'positive_centroids': [],
-            'all_centroids': [],
-            'stardist_labels': None
+            'stardist_total_count_filtered': 0, 'stardist_ki67_pos_count': 0, 'stardist_proliferation_index': 0.0,
+            'positive_centroids': [], 'all_centroids': [], 'stardist_labels': None
         })
         return hotspot
 
-    # Now, classify these tumor_cell_mask-filtered nuclei for DAB staining.
-    # final_labels_filtered already contains only nuclei within tumor_cell_mask regions.
-    # final_corresponding_tumor_cell_patch is the aligned mask patch.
-    # The `total_nuclei` from this call will be the same as final_refined_nuclei_count.
     classified_labels_dab, dab_pos_count, total_nuclei_for_dab_check, pos_centroids, all_centroids = classify_labels_by_dab(
-        final_labels_filtered,                 # Labels already filtered by tumor cell mask
-        final_hs_patch_rgb,                    # Corresponding RGB patch
-        final_corresponding_tumor_cell_patch, # Aligned tumor cell mask patch (used by classify_labels_by_dab for centroid check)
-        dab_threshold,
-        min_dab_positive_ratio
+        final_labels_filtered, final_hs_patch_rgb, final_corresponding_tumor_cell_patch,
+        dab_threshold, min_dab_positive_ratio
     )
     
     if total_nuclei_for_dab_check != final_refined_nuclei_count:
@@ -636,7 +610,7 @@ def refine_hotspot_with_stardist(
     })
 
     logger.info(
-        f"[{func_name}] Candidate {candidate_index+1} (Actual Patch L{hotspot_level} {hotspot['size_level']}): "
+        f"[{func_name}] Candidate {candidate_index+1} (Final Patch L{hotspot_level} {hotspot['size_level']} at {hotspot['coords_level']}): "
         f"Total Tumor Cells={final_total_tumor_cell_nuclei}, "
         f"Ki67+ Tumor Cells={dab_pos_count}, PI={hotspot['stardist_proliferation_index']:.2%}"
     )
@@ -652,6 +626,3 @@ def refine_hotspot_with_stardist(
         )
 
     return hotspot
-
-
-
