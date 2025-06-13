@@ -2,7 +2,7 @@
 UNet training script for semantic segmentation of tumor in 4096x4096 WSI patches
 """
 
-from tumor_all_preprocessing import get_dataloaders
+from preprocessing import get_dataloaders
 import torch
 import wandb
 import argparse
