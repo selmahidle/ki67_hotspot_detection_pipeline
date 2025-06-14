@@ -20,8 +20,9 @@ Image.MAX_IMAGE_PIXELS = None
 
 def write_hotspot_results(hotspot_results, output_dir, slide_path, hotspot_level=2):
     """
-    Writes the hotspot analysis results to a text file, using counts derived
-    from local DAB classification per nucleus.
+    Writes the final hotspot analysis results to a text file.
+    The results are presented in the same order as they were selected by the pipeline,
+    which is ranked by the Proliferation Index.
     """
     logger = logging.getLogger(__name__)
 
@@ -29,42 +30,41 @@ def write_hotspot_results(hotspot_results, output_dir, slide_path, hotspot_level
         logger.warning("No hotspot results provided to write_hotspot_results. Skipping file creation.")
         return
 
-    results_file = os.path.join(output_dir, Path(slide_path).stem + "_hotspots_stardist_localDAB.txt")
+    results_file = os.path.join(output_dir, Path(slide_path).stem + "_hotspots_final_results.txt")
     try:
         with open(results_file, 'w') as f:
             f.write(f"Slide: {Path(slide_path).name}\n")
             valid_results = [hs for hs in hotspot_results if isinstance(hs, dict)]
-            f.write(f"Processed {len(valid_results)} candidate hotspots (ranked by local DAB Ki67+ count).\n")
+            
+            f.write(f"Final {len(valid_results)} hotspots (ranked by Proliferation Index).\n")
             f.write("-" * 30 + "\n")
 
-            valid_results.sort(key=lambda hs: hs.get('stardist_ki67_pos_count', 0), reverse=True)
-
             for i, hs in enumerate(valid_results):
-                f.write(f"Hotspot {i+1}:\n")
-                f.write(f"  Level 0 Coords (x,y): {hs.get('coords_l0', 'N/A')}\n")
-                f.write(f"  Level 0 Size (w,h): {hs.get('size_l0', 'N/A')}\n")
-                f.write(f"  Level {hs.get('level', hotspot_level)} Coords (x,y): {hs.get('coords_level', 'N/A')}\n")
-                f.write(f"  Level {hs.get('level', hotspot_level)} Size (w,h): {hs.get('size_level', 'N/A')}\n")
-
+                f.write(f"Hotspot Rank {i+1}:\n")
+                proliferation_index_fraction = hs.get('stardist_proliferation_index', 0.0)
                 ki67_pos_count = hs.get('stardist_ki67_pos_count', 0)
                 total_filtered_count = hs.get('stardist_total_count_filtered', 0)
-                proliferation_index_fraction = hs.get('stardist_proliferation_index', 0.0)
-
-                f.write(f"  Score (Local DAB Ki67+ Count): {ki67_pos_count}\n")
-                f.write(f"  Total Filtered Nuclei: {total_filtered_count}\n")
+                initial_density = hs.get('density_score', 'N/A')
 
                 try:
                     proliferation_index_percent = float(proliferation_index_fraction) * 100.0
                     f.write(f"  Ki67 Proliferation Index (%): {proliferation_index_percent:.2f}%\n")
                 except (ValueError, TypeError):
                      f.write(f"  Ki67 Proliferation Index (%): N/A\n")
-                initial_density = hs.get('density_score', 'N/A')
+
+                f.write(f"  Ki67-Positive Nuclei: {ki67_pos_count}\n")
+                f.write(f"  Total Tumor Nuclei: {total_filtered_count}\n")
+                f.write(f"  Level {hs.get('level', hotspot_level)} Coords (x,y): {hs.get('coords_level', 'N/A')}\n")
+                f.write(f"  Level {hs.get('level', hotspot_level)} Size (w,h): {hs.get('size_level', 'N/A')}\n")
+                f.write(f"  Level 0 Coords (x,y): {hs.get('coords_l0', 'N/A')}\n")
+                f.write(f"  Level 0 Size (w,h): {hs.get('size_l0', 'N/A')}\n")
+
                 if initial_density != 'N/A' and isinstance(initial_density, (float, int)):
                     f.write(f"  (Initial Candidate Density Score): {initial_density:.4f}\n")
 
                 f.write("-" * 10 + "\n")
 
-        logger.info(f"Hotspot details (using local DAB counts) saved to: {results_file}")
+        logger.info(f"Final hotspot results saved to: {results_file}")
 
     except IOError as e:
         logger.error(f"Error writing hotspot results file {results_file}: {e}")
