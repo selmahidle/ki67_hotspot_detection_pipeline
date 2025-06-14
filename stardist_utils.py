@@ -466,22 +466,33 @@ def refine_hotspot_with_stardist(
     final_labels_filtered = None
     final_corresponding_tumor_cell_patch = None
     final_refined_nuclei_count = 0
-    final_coords_x, final_coords_y = initial_x, initial_y 
+    final_coords_x, final_coords_y = initial_x, initial_y
 
     iteration = 0
     while iteration < max_iterations:
+        if final_hs_patch_rgb is not None and final_labels_filtered is not None:
+            temp_classified_labels, _, _, _, _ = classify_labels_by_dab(
+                final_labels_filtered, final_hs_patch_rgb, final_corresponding_tumor_cell_patch,
+                dab_threshold, min_dab_positive_ratio
+            )
+            
+            dab_positive_mask = (temp_classified_labels == 2)
+            centroid_of_dab_pos = _get_mask_centroid(dab_positive_mask)
+
+            if centroid_of_dab_pos:
+                cy, cx = centroid_of_dab_pos
+                center_x = final_coords_x + cx
+                center_y = final_coords_y + cy
+                logger.debug(f"[{func_name}] Iter {iteration+1}: Re-centering FoV to DAB+ nuclei centroid at ({center_x:.1f}, {center_y:.1f})")
+
         coords_x = int(round(center_x - current_target_size_w / 2.0))
         coords_y = int(round(center_y - current_target_size_h / 2.0))
-
         coords_x = np.clip(coords_x, 0, full_mask_w - 1)
         coords_y = np.clip(coords_y, 0, full_mask_h - 1)
-
         target_w_int = int(round(current_target_size_w))
         target_h_int = int(round(current_target_size_h))
-
         target_w_int = min(target_w_int, full_mask_w - coords_x)
         target_h_int = min(target_h_int, full_mask_h - coords_y)
-
         target_w_int = max(1, target_w_int)
         target_h_int = max(1, target_h_int)
         
@@ -509,11 +520,8 @@ def refine_hotspot_with_stardist(
         )
         
         if current_labels_filtered is None:
-            logger.warning(f"[{func_name}] Cand {candidate_index+1}, Iter {iteration+1}: predict_patch_stardist failed. Adjusting FoV blindly.")
-            current_target_size_w *= (1 - resize_factor) if current_target_size_w > 1024 else (1 + resize_factor)
-            current_target_size_h *= (1 - resize_factor) if current_target_size_h > 1024 else (1 + resize_factor)
-            iteration += 1
-            continue
+            logger.warning(f"[{func_name}] Cand {candidate_index+1}, Iter {iteration+1}: predict_patch_stardist failed. Ending refinement for this candidate.")
+            break
 
         final_hs_patch_rgb = hs_patch_rgb
         final_labels_filtered = current_labels_filtered
@@ -529,25 +537,9 @@ def refine_hotspot_with_stardist(
             break
         
         elif final_refined_nuclei_count < min_cells:
-            nuclei_mask = (current_labels_filtered > 0)
-            centroid_of_nuclei = _get_mask_centroid(nuclei_mask)
-
-            if centroid_of_nuclei:
-                cy, cx = centroid_of_nuclei
-                center_x = coords_x + cx
-                center_y = coords_y + cy
-                logger.debug(f"[{func_name}] Re-centering FoV to nuclei centroid at ({center_x:.1f}, {center_y:.1f})")
-            else:
-                centroid_of_tumor = _get_mask_centroid(extracted_tumor_cell_patch)
-                if centroid_of_tumor:
-                    cy, cx = centroid_of_tumor
-                    center_x = coords_x + cx
-                    center_y = coords_y + cy
-                    logger.debug(f"[{func_name}] No nuclei found. Re-centering to tumor mask centroid at ({center_x:.1f}, {center_y:.1f})")
-
             current_target_size_w *= (1 + resize_factor)
             current_target_size_h *= (1 + resize_factor)
-        else:
+        else: 
             current_target_size_w *= (1 - resize_factor)
             current_target_size_h *= (1 - resize_factor)
 
