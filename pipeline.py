@@ -37,49 +37,38 @@ def calculate_iou(boxA, boxB):
     return iou
 
 
-
 def apply_nms_to_candidates(candidates, iou_threshold=0.5, force_level_coords=False):
     """
-    Applies Non-Maximum Suppression (NMS) to a list of candidate hotspots.
-    It will sort the candidates by score before applying NMS.
+    Applies NMS to a list of candidates.
+    Assumes the 'candidates' list is already sorted from highest to lowest score.
     """
     if not candidates:
         return []
 
-    if force_level_coords:
-        coord_key, size_key, score_key = 'coords_level', 'size_level', 'stardist_proliferation_index'
-        logger.info("NMS is forced to use 'level' coordinates and 'stardist_proliferation_index' score.")
-    else:
-        coord_key, size_key, score_key = 'coords_l0', 'size_l0', 'density_score'
-        logger.info("NMS will use 'L0' coordinates and 'density_score'.")
-        
-    if not all(k in candidates[0] for k in [coord_key, size_key, score_key]):
-        logger.error(f"NMS failed: Candidates are missing required keys: '{coord_key}', '{size_key}', or '{score_key}'")
-        return candidates
+    coord_key = 'coords_level' if force_level_coords else 'coords_l0'
+    size_key = 'size_level' if force_level_coords else 'size_l0'
+    keep = []
 
-    boxes_info = [{
-       'box': [c[coord_key][0], c[coord_key][1], c[coord_key][0] + c[size_key][0], c[coord_key][1] + c[size_key][1]],
-        'score': c.get(score_key, 0),
-        'original_candidate': c
-    } for c in candidates]
+    boxes = np.array([
+        [c[coord_key][0], c[coord_key][1], c[size_key][0], c[size_key][1]]
+        for c in candidates
+    ])
 
-    boxes_info.sort(key=lambda x: x['score'], reverse=True)
-    suppressed = np.zeros(len(boxes_info), dtype=bool)
-    
-    for i in range(len(boxes_info)):
-        if suppressed[i]:
-            continue  
-        for j in range(i + 1, len(boxes_info)):
-            if suppressed[j]:
-                continue 
-            
-            iou = calculate_iou(boxes_info[i]['box'], boxes_info[j]['box'])
-            
-            if iou > iou_threshold:
-                suppressed[j] = True
+    while len(candidates) > 0:
+        best_candidate = candidates.pop(0)
+        best_box = boxes[0]
+        boxes = boxes[1:]
+        keep.append(best_candidate)
 
-    final_candidates = [info['original_candidate'] for i, info in enumerate(boxes_info) if not suppressed[i]]
-    return final_candidates
+        if len(candidates) == 0:
+            break
+
+        ious = np.array([calculate_iou(best_box, other_box) for other_box in boxes])
+        remaining_indices = np.where(ious <= iou_threshold)[0]
+        candidates = [candidates[i] for i in remaining_indices]
+        boxes = boxes[remaining_indices]
+
+    return keep
 
 
 def process_slide_ki67(slide_path, output_dir, tumor_model, cell_model, stardist_model, device):
@@ -420,8 +409,8 @@ def process_slide_ki67(slide_path, output_dir, tumor_model, cell_model, stardist
                     reverse=True
                 )
                 logger.info(f"Sorted {len(refined_hotspots_results)} refined hotspots by Proliferation Index.")
-                logger.info(f"Applying second NMS to {len(refined_hotspots_results)} refined hotspots with IoU threshold 0.55...")
-                final_hotspots_after_nms = apply_nms_to_candidates(refined_hotspots_results, iou_threshold=0.55, force_level_coords=True)
+                logger.info(f"Applying second NMS to {len(refined_hotspots_results)} refined hotspots with IoU threshold 0.5...")
+                final_hotspots_after_nms = apply_nms_to_candidates(refined_hotspots_results, iou_threshold=0.5, force_level_coords=True)
                 logger.info(f"Number of refined hotspots after second NMS: {len(final_hotspots_after_nms)}")
 
                 hotspots = final_hotspots_after_nms[:hotspot_top_n]
