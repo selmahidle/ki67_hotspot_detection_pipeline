@@ -118,9 +118,9 @@ def save_stardist_comparison_plot(hs_patch_rgb, labels_filtered, ref_mask, save_
         plt.tight_layout(pad=1.0)
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
         plt.close(fig)
-        logger.info(f"Successfully saved Matplotlib comparison plot to {save_path}")
+        logger.info(f"Successfully saved comparison plot to {save_path}")
     except Exception as e_plot:
-        logger.error(f"Error generating Matplotlib comparison plot for {save_path}: {e_plot}", exc_info=True)
+        logger.error(f"Error generating comparison plot for {save_path}: {e_plot}", exc_info=True)
 
 
 def draw_label_contours_on_bgr(bgr_image_roi, labels, line_color=(0, 255, 0), line_thickness=1):
@@ -297,7 +297,6 @@ def generate_overlay(slide, overlay_level, hotspot_level,
             overlay_bgr = temp_outline_drawing_layer
 
         if hotspots:
-            logger.info(f"Drawing {len(hotspots)} hotspots using layered approach...")
             sf_coords_hs_drawing = slide.level_downsamples[overlay_level] / slide.level_downsamples[hotspot_level]
 
             for hotspot_data in hotspots:
