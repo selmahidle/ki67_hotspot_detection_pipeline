@@ -42,34 +42,67 @@ def calculate_iou(boxA, boxB):
     return iou
 
 
-def apply_nms_to_candidates(candidates, iou_threshold=0.5):
+def apply_nms_to_candidates(candidates, iou_threshold=0.5, force_level_coords=False):
+    """
+    Applies Non-Maximum Suppression (NMS) to a list of candidate hotspots.
+    
+    Args:
+        candidates (list): A list of hotspot dictionaries.
+        iou_threshold (float): The IoU threshold for suppression.
+        force_level_coords (bool): If True, forces the use of 'coords_level' and 'size_level'
+                                   for IoU calculation, ignoring L0 coords. This is crucial for
+                                   post-refinement NMS where L0 might be inconsistent.
+    """
     if not candidates:
         return []
-    use_l0 = 'coords_l0' in candidates[0]
+
+    # Determine which coordinate level to use
+    if force_level_coords:
+        use_l0 = False
+        logger.info("NMS is forced to use 'level' coordinates.")
+    else:
+        use_l0 = 'coords_l0' in candidates[0]
+        logger.info(f"NMS will use {'L0' if use_l0 else 'level'} coordinates.")
+        
     coord_key = 'coords_l0' if use_l0 else 'coords_level'
     size_key  = 'size_l0'   if use_l0 else 'size_level'
+    
+    # Check if necessary keys exist in the first candidate
+    if not all(k in candidates[0] for k in [coord_key, size_key]):
+        logger.error(f"NMS failed: Candidates are missing required keys: '{coord_key}' or '{size_key}'")
+        return candidates # Return as is if keys are missing
 
-    if 'density_score' in candidates[0]:
-        score_key = 'density_score'
-    else:
-        score_key = 'stardist_proliferation_index' if 'stardist_proliferation_index' in candidates[0] else 'stardist_ki67_pos_count'
+    # The list of candidates is assumed to be pre-sorted by score.
+    # We do NOT re-sort it here. We respect the incoming order.
+    sorted_cands = candidates 
 
-    sorted_cands = sorted(candidates, key=lambda c: c.get(score_key, 0), reverse=True)
     boxes = np.array([
         [c[coord_key][0], c[coord_key][1], c[size_key][0], c[size_key][1]]
         for c in sorted_cands
     ])
-    keep = []
-    idxs = list(range(len(sorted_cands)))
-    while idxs:
-        i = idxs.pop(0)
-        keep.append(i)
-        rem = []
-        for j in idxs:
-            if calculate_iou(boxes[i], boxes[j]) < iou_threshold:
-                rem.append(j)
-        idxs = rem
-    return [sorted_cands[i] for i in keep]
+    keep_indices = []
+    
+    # Create a list of original indices to track which candidates to keep
+    original_indices = list(range(len(sorted_cands)))
+
+    while len(original_indices) > 0:
+        # The first index is always kept, as it has the highest score among the remaining items
+        i = original_indices.pop(0)
+        keep_indices.append(i)
+        
+        # Check for overlap with the remaining boxes
+        remaining_indices_after_comparison = []
+        for j_original_idx in original_indices:
+            iou = calculate_iou(boxes[i], boxes[j_original_idx])
+            if iou < iou_threshold:
+                # This box does not overlap enough, so keep it for the next round of comparisons
+                remaining_indices_after_comparison.append(j_original_idx)
+        
+        # Update the list of indices to process in the next iteration
+        original_indices = remaining_indices_after_comparison
+
+    # Return the candidates that were kept, in their original high-to-low score order
+    return [sorted_cands[i] for i in keep_indices]
 
 
 def process_slide_ki67(slide_path, output_dir, tumor_model, cell_model, stardist_model, device):
@@ -154,7 +187,7 @@ def process_slide_ki67(slide_path, output_dir, tumor_model, cell_model, stardist
                 if ds4_img_bgr is None: logger.error(f"cv2.imread returned None for existing ds4 file: {ds4_path}")
                 else:
                     logger.info(f"Successfully loaded existing ds4 image via cv2, shape: {ds4_img_bgr.shape}")
-                    ds4_img = cv2.cvtColor(ds4_img_bgr, cv2.COLOR_BGR2RGB)
+                    ds4_img = cv2.cvtColor(ds8_img_bgr, cv2.COLOR_BGR2RGB)
             except Exception as load_err: logger.error(f"Exception during cv2.imread for ds4: {load_err}", exc_info=True); ds4_img = None
         if ds4_img is None:
             logger.info(f"Attempting to generate ds4 image (Level {ds4_level})...")
@@ -383,7 +416,8 @@ def process_slide_ki67(slide_path, output_dir, tumor_model, cell_model, stardist
             
         if candidate_hotspots:
             logger.info(f"Applying first NMS to {len(candidate_hotspots)} initial candidates with IoU threshold 0.5...")
-            candidate_hotspots = apply_nms_to_candidates(candidate_hotspots, iou_threshold=0.5)
+            # For this first NMS, we use L0 coordinates because they are consistent from identify_hotspots
+            candidate_hotspots = apply_nms_to_candidates(candidate_hotspots, iou_threshold=0.5, force_level_coords=False)
             logger.info(f"Number of candidates after first NMS: {len(candidate_hotspots)}")
 
         # === Stage 6: StarDist Refinement, Re-ranking & Second NMS ===
@@ -411,7 +445,7 @@ def process_slide_ki67(slide_path, output_dir, tumor_model, cell_model, stardist
                     dab_threshold=hotspot_dab_threshold,
                     debug_dir=refinement_debug_base_dir,
                     candidate_index=i,
-                    tumor_cell_mask_l2=cell_mask_binary_l2
+                    tumor_cell_mask_l2=cell_mask_binary_l2 
                 )
                 if updated_hotspot and all(k in updated_hotspot for k in ['stardist_ki67_pos_count', 'stardist_total_count_filtered']):
                     refined_hotspots_results.append(updated_hotspot)
@@ -423,17 +457,17 @@ def process_slide_ki67(slide_path, output_dir, tumor_model, cell_model, stardist
                     key=lambda hs: hs.get('stardist_proliferation_index', 0), 
                     reverse=True
                 )
-
+                logger.info(f"Sorted {len(refined_hotspots_results)} refined hotspots by Proliferation Index.")
                 logger.info(f"Applying second NMS to {len(refined_hotspots_results)} refined hotspots with IoU threshold 0.55...")
-                refined_hotspots_results = apply_nms_to_candidates(refined_hotspots_results, iou_threshold=0.55)
-                logger.info(f"Number of refined hotspots after second NMS: {len(refined_hotspots_results)}")
+                final_hotspots_after_nms = apply_nms_to_candidates(refined_hotspots_results, iou_threshold=0.55, force_level_coords=True)
+                logger.info(f"Number of refined hotspots after second NMS: {len(final_hotspots_after_nms)}")
 
-                hotspots = refined_hotspots_results[:hotspot_top_n]
+                hotspots = final_hotspots_after_nms[:hotspot_top_n]
 
-                logger.info(f"Selected final {len(hotspots)} hotspots (ranked by StarDist Ki67+ count):")
+                logger.info(f"Selected final {len(hotspots)} hotspots (ranked by Proliferation Index):")
                 for rank, hs in enumerate(hotspots):
-                    hs['final_score'] = hs.get('stardist_ki67_pos_count', 0)
-                    logger.info(f"  Final Rank {rank+1}: Ki67+={hs['final_score']}, PI={hs.get('stardist_proliferation_index', 0.0):.2%}, Coords=L0 {hs.get('coords_l0')}")
+                    hs['final_score'] = hs.get('stardist_proliferation_index', 0.0)
+                    logger.info(f"  Final Rank {rank+1}: PI={hs['final_score']:.2%}, Ki67+={hs.get('stardist_ki67_pos_count', 0)}, Coords=L{hotspot_level} {hs.get('coords_level')}")
             else:
                 logger.warning("No hotspots available after StarDist refinement and NMS.")
 
