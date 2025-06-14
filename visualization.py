@@ -11,7 +11,6 @@ from skimage.util import img_as_float, img_as_ubyte
 from skimage.transform import resize
 import warnings
 import matplotlib.pyplot as plt
-from stain_utils import get_dab_mask
 
 logger = logging.getLogger(__name__)
 
@@ -33,29 +32,29 @@ def format_for_save(img_array):
         if img_array.dtype in (np.float32, np.float64, float):
             max_val = np.max(img_array)
             min_val = np.min(img_array)
-            if min_val < 0 or max_val > 1.0: # Normalize if not in [0,1] range
-                if np.isclose(min_val, max_val): # Handle constant image
+            if min_val < 0 or max_val > 1.0:
+                if np.isclose(min_val, max_val): 
                     img_array = np.zeros_like(img_array) if min_val < 0.5 else np.ones_like(img_array)
                 else:
-                    img_array = (img_array - min_val) / (max_val - min_val + 1e-9) # Normalize to [0,1]
-            img_array = np.clip(img_array, 0, 1) # Clip to ensure [0,1]
+                    img_array = (img_array - min_val) / (max_val - min_val + 1e-9) 
+            img_array = np.clip(img_array, 0, 1) 
         try:
             with warnings.catch_warnings():
-                warnings.simplefilter("ignore") # Suppress precision loss warnings
+                warnings.simplefilter("ignore") 
                 img_ubyte = img_as_ubyte(img_array)
         except ValueError as e:
             logger.warning(f"[{func_name}]: img_as_ubyte failed ({e}). Returning black image. Input stats: min={np.min(img_array)}, max={np.max(img_array)}, dtype={img_array.dtype}")
             h, w = img_array.shape[:2] if img_array.ndim >= 2 else (100, 100)
             return np.zeros((h, w, 3), dtype=np.uint8)
 
-    if img_ubyte.ndim == 2: # Grayscale
-        return np.stack([img_ubyte] * 3, axis=-1) # Convert to 3-channel
+    if img_ubyte.ndim == 2:
+        return np.stack([img_ubyte] * 3, axis=-1) 
     elif img_ubyte.ndim == 3:
-        if img_ubyte.shape[2] == 1: # Single channel
-            return np.concatenate([img_ubyte] * 3, axis=-1) # Convert to 3-channel
-        elif img_ubyte.shape[2] == 4: # RGBA
-            return img_ubyte[..., :3] # Return RGB
-        elif img_ubyte.shape[2] == 3: # RGB
+        if img_ubyte.shape[2] == 1: 
+            return np.concatenate([img_ubyte] * 3, axis=-1) 
+        elif img_ubyte.shape[2] == 4: 
+            return img_ubyte[..., :3] 
+        elif img_ubyte.shape[2] == 3: 
             return img_ubyte
         else:
             logger.warning(f"[{func_name}]: Unexpected channel count ({img_ubyte.shape[2]}) in image with shape {img_ubyte.shape}. Returning first 3 channels if possible, else black.")
@@ -69,6 +68,7 @@ def format_for_save(img_array):
             return np.zeros((h, w, 3), dtype=np.uint8)
         except: return np.zeros((100, 100, 3), dtype=np.uint8)
 
+
 def save_stardist_comparison_plot(hs_patch_rgb, labels_filtered, ref_mask, save_path, classified_labels_dab=None):
     """
     Generates and saves a Matplotlib comparison plot: 
@@ -80,11 +80,9 @@ def save_stardist_comparison_plot(hs_patch_rgb, labels_filtered, ref_mask, save_
     logger.debug(f"Generating Matplotlib StarDist comparison plot for: {save_path}")
 
     try:
-        # --- Panel 1: Original Image ---
         original_display = format_for_save(hs_patch_rgb.copy())
         original_shape = original_display.shape[:2]
 
-        # --- Panel 3: StarDist Overlay --- (Prepared early to reuse base image)
         pred_overlay_display = np.zeros_like(original_display, dtype=np.uint8)
         if labels_filtered is not None and isinstance(labels_filtered, np.ndarray) and labels_filtered.ndim == 2 and labels_filtered.size > 0:
             labels_viz = resize(labels_filtered, original_shape, order=0, preserve_range=True, anti_aliasing=False).astype(labels_filtered.dtype)
@@ -92,28 +90,21 @@ def save_stardist_comparison_plot(hs_patch_rgb, labels_filtered, ref_mask, save_
             pred_overlay_rgb_float = label2rgb(labels_viz, image=base_for_overlay_float, bg_label=0, bg_color=None, kind='overlay', image_alpha=0.5, alpha=0.5)
             pred_overlay_display = format_for_save(pred_overlay_rgb_float)
 
-        # --- Panel 2: Reference (Tumor) Mask ---
         gt_display = np.zeros_like(original_display, dtype=np.uint8)
         if ref_mask is not None and isinstance(ref_mask, np.ndarray) and ref_mask.ndim == 2 and ref_mask.size > 0:
             ref_mask_viz = resize(ref_mask, original_shape, order=0, preserve_range=True, anti_aliasing=False)
             gt_display = format_for_save(((ref_mask_viz > 0) * 255).astype(np.uint8))
-            
-        # --- Panel 4: DAB Classification ---
+
         dab_class_display = np.zeros_like(original_display, dtype=np.uint8)
         if classified_labels_dab is not None and classified_labels_dab.size > 0:
-            # Resize classified mask to match display shape
             classified_labels_resized = resize(classified_labels_dab, original_shape, order=0, preserve_range=True, anti_aliasing=False).astype(classified_labels_dab.dtype)
+
+            dab_colors = [(0, 1, 0), (1, 0, 0)]  
             
-            # Define colors: label 1 (DAB-) -> Green, label 2 (DAB+) -> Red
-            # label2rgb expects float colors [0,1]
-            dab_colors = [(0, 1, 0), (1, 0, 0)]  # Green for 1, Red for 2
-            
-            # Create RGB image from the classified labels
             dab_viz_float = label2rgb(classified_labels_resized, bg_label=0, bg_color=(0,0,0), colors=dab_colors)
             dab_class_display = format_for_save(dab_viz_float)
 
-        # --- Create and Save Plot ---
-        fig, axes = plt.subplots(1, 4, figsize=(24, 6)) # Changed to 1x4
+        fig, axes = plt.subplots(1, 4, figsize=(24, 6))
         axes = axes.ravel()
 
         titles = ['Original Patch', 'Reference (Tumor) Mask', 'StarDist Overlay', 'DAB Classification']
@@ -141,7 +132,7 @@ def draw_label_contours_on_bgr(bgr_image_roi, labels, line_color=(0, 255, 0), li
     if labels.shape[:2] != bgr_image_roi.shape[:2]:
         logger.warning(f"draw_label_contours_on_bgr: Shape mismatch labels {labels.shape} vs ROI {bgr_image_roi.shape}. Resizing labels.")
         try:
-            labels_resized = cv2.resize(labels.astype(np.uint16), # Assuming labels are integer type for INTER_NEAREST
+            labels_resized = cv2.resize(labels.astype(np.uint16), 
                                      (bgr_image_roi.shape[1], bgr_image_roi.shape[0]),
                                      interpolation=cv2.INTER_NEAREST)
             labels_to_process = labels_resized
@@ -186,7 +177,6 @@ def generate_overlay(slide, overlay_level, hotspot_level,
             logger.error(f"Failed to read base image for overlay L{overlay_level}: {e_read}")
             return None
 
-        # Colors and Thicknesses (BGR for OpenCV)
         tissue_color = (0, 255, 0)      # Green
         tumor_color = (255, 0, 0)       # Blue
         cell_region_fill_color = (150, 255, 255) # Light Yellow for fill (general cell mask)
@@ -249,7 +239,6 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                     cv2.addWeighted(temp_fill_layer, fill_alpha, roi_bgr_to_draw_on, 1 - fill_alpha, 0, roi_bgr_to_draw_on)
                     cv2.drawContours(roi_bgr_to_draw_on, contours, -1, border_col, border_thick)
 
-        # 1. Tumor Cell Mask 
         cell_mask_scaled_overlay = None
         if cell_mask_binary_l2 is not None and np.any(cell_mask_binary_l2):
             cell_mask_u8 = cell_mask_binary_l2.astype(np.uint8)
@@ -264,7 +253,6 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                 alpha_yellow_fill = 0.4
                 cv2.addWeighted(fill_layer_yellow_cells, alpha_yellow_fill, overlay_bgr, 1 - alpha_yellow_fill, 0, overlay_bgr)
 
-        # 2. DAB+ regions 
         dab_plus_on_overlay_img = dab_plus_mask_l2_overlay if dab_plus_mask_l2_overlay is not None else np.zeros_like(overlay_rgb_original[:,:,0])
         contours_dab_for_border = None
 
@@ -284,11 +272,8 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                 contours_dab_for_border, _ = cv2.findContours(final_dab_regions_to_draw_for_fill, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         overlay_bgr_with_fills = overlay_bgr.copy()
-
-        # 3. Draw Main Outlines (Tissue, Tumor, DAB+ border) - these will be made semi-transparent
         temp_outline_drawing_layer = overlay_bgr.copy()
 
-        # Tissue Outline
         if tissue_mask_overlay is not None and np.any(tissue_mask_overlay):
             tissue_mask_final = tissue_mask_overlay.astype(np.uint8)
             if tissue_mask_final.shape[:2] != (overlay_h, overlay_w):
@@ -296,7 +281,6 @@ def generate_overlay(slide, overlay_level, hotspot_level,
             contours, _ = cv2.findContours(tissue_mask_final, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             cv2.drawContours(temp_outline_drawing_layer, contours, -1, tissue_color, ct_tissue)
 
-        # Tumor Outline
         if tumor_mask_overlay is not None and np.any(tumor_mask_overlay):
             tumor_mask_final = tumor_mask_overlay.astype(np.uint8)
             if tumor_mask_final.shape[:2] != (overlay_h, overlay_w):
@@ -304,31 +288,24 @@ def generate_overlay(slide, overlay_level, hotspot_level,
             contours, _ = cv2.findContours(tumor_mask_final, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             cv2.drawContours(temp_outline_drawing_layer, contours, -1, tumor_color, ct_tumor)
 
-        # DAB+ in Tumor Cell Mask (Border)
         if contours_dab_for_border:
             cv2.drawContours(temp_outline_drawing_layer, contours_dab_for_border, -1, dab_intersect_cell_border_color, ct_dab_border)
 
-        # Apply transparency to the outlines
         if outline_alpha < 1.0:
             cv2.addWeighted(temp_outline_drawing_layer, outline_alpha, overlay_bgr_with_fills, 1 - outline_alpha, 0, overlay_bgr)
         else:
             overlay_bgr = temp_outline_drawing_layer
 
-        # 4. Hotspot Layered Drawing
         if hotspots:
             logger.info(f"Drawing {len(hotspots)} hotspots using layered approach...")
             sf_coords_hs_drawing = slide.level_downsamples[overlay_level] / slide.level_downsamples[hotspot_level]
 
-            # === STAGE 1: Draw all cell details ===
-            # This loop draws the colored StarDist cells for all hotspots.
-            # By drawing onto the main overlay_bgr, overlapping regions will blend correctly.
             for hotspot_data in hotspots:
                 x_hl, y_hl = hotspot_data['coords_level']
                 w_hl, h_hl = hotspot_data['size_level']
                 x_ol, y_ol = int(x_hl * sf_coords_hs_drawing), int(y_hl * sf_coords_hs_drawing)
                 w_ol, h_ol = int(w_hl * sf_coords_hs_drawing), int(h_hl * sf_coords_hs_drawing)
                 
-                # Define the Region of Interest (ROI) on the main overlay
                 roi = overlay_bgr[
                     min(max(0, y_ol), overlay_bgr.shape[0]) : min(y_ol + h_ol, overlay_bgr.shape[0]),
                     min(max(0, x_ol), overlay_bgr.shape[1]) : min(x_ol + w_ol, overlay_bgr.shape[1])
@@ -339,17 +316,14 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                     classified_labels_dab_for_hs = hotspot_data.get('classified_labels_dab_hs')
                     
                     if stardist_labels_for_hs is not None and classified_labels_dab_for_hs is not None:
-                        # The helper function modifies the ROI in-place, which updates overlay_bgr
                         _draw_stardist_in_roi(
                             roi, 
                             stardist_labels_for_hs, 
                             classified_labels_dab_for_hs, 
-                            fill_alpha=0.4,  # Slightly increased alpha for visibility
+                            fill_alpha=0.4,  
                             border_thick=1
                         )
 
-            # === STAGE 2: Draw all semi-transparent hotspot boxes ===
-            # This ensures boxes are drawn on top of all cell details.
             for i, hotspot_data in enumerate(hotspots):
                 x_hl, y_hl = hotspot_data['coords_level']
                 w_hl, h_hl = hotspot_data['size_level']
@@ -357,14 +331,10 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                 w_ol, h_ol = int(w_hl * sf_coords_hs_drawing), int(h_hl * sf_coords_hs_drawing)
                 
                 hs_col = hotspot_box_colors[i % len(hotspot_box_colors)]
-                
-                # We need a temporary layer for blending the box itself
                 temp_box_layer = overlay_bgr.copy()
                 cv2.rectangle(temp_box_layer, (x_ol, y_ol), (x_ol + w_ol, y_ol + h_ol), hs_col, hs_box_thick)
                 cv2.addWeighted(temp_box_layer, outline_alpha, overlay_bgr, 1 - outline_alpha, 0, overlay_bgr)
 
-            # === STAGE 3: Draw all text labels (in reverse order) ===
-            # Drawing in reverse ensures HS1 text is on top of HS2, etc.
             for i, hotspot_data in reversed(list(enumerate(hotspots))):
                 x_hl, y_hl = hotspot_data['coords_level']
                 w_hl, h_hl = hotspot_data['size_level']
@@ -399,7 +369,6 @@ def generate_overlay(slide, overlay_level, hotspot_level,
         else:
             logger.info("No hotspots provided to draw.")
 
-        # 5. Legend
         lx, ly = 30, 30
         bs = int(25 * font_scale_legend)
         ls = int(35 * font_scale_legend)
@@ -407,12 +376,11 @@ def generate_overlay(slide, overlay_level, hotspot_level,
 
         def draw_legend_item(img, y_pos, color, txt, is_outline=False, outline_color_actual=None):
             if is_outline and outline_alpha < 1.0:
-                approx_bg_color = np.array([128, 128, 128], dtype=np.uint8) # BGR
-                # Ensure outline_color_actual or color is a BGR tuple/list for np.array
+                approx_bg_color = np.array([128, 128, 128], dtype=np.uint8) 
                 current_outline_color = outline_color_actual if outline_color_actual else color
                 if isinstance(current_outline_color, tuple) or isinstance(current_outline_color, list):
                      line_color_arr = np.array(current_outline_color, dtype=np.uint8)
-                else: # Fallback if it's already an array or some other form
+                else: 
                      line_color_arr = np.array(color, dtype=np.uint8)
 
 
@@ -421,11 +389,9 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                 display_color = tuple(int(c) for c in display_color_components_np_uint8)
 
                 cv2.rectangle(img, (lx, y_pos), (lx + bs, y_pos + bs), display_color, -1)
-                # Ensure current_outline_color is a tuple of Python ints for the border
                 border_draw_color = tuple(int(c) for c in line_color_arr)
                 cv2.rectangle(img, (lx, y_pos), (lx + bs, y_pos + bs), border_draw_color, 1)
             else:
-                 # Ensure color is a tuple of Python ints
                  draw_color = tuple(int(c) for c in np.array(color)) if not (isinstance(color, tuple) and all(isinstance(ci, int) for ci in color)) else color
                  cv2.rectangle(img, (lx, y_pos), (lx + bs, y_pos + bs), draw_color, -1)
 
@@ -458,6 +424,7 @@ def generate_overlay(slide, overlay_level, hotspot_level,
     except Exception as e:
         logger.error(f"Error generating overlay: {e}", exc_info=True)
         return None
+
 
 def format_image_for_save_rgba_or_bgr(
     image_input: np.ndarray,
@@ -496,14 +463,14 @@ def format_image_for_save_rgba_or_bgr(
             bgr = cv2.cvtColor(img_gray, cv2.COLOR_GRAY2BGR)
             alpha_channel = np.full((img_gray.shape[0], img_gray.shape[1]), alpha_byte, dtype=np.uint8)
             return cv2.merge((bgr[:,:,0],bgr[:,:,1],bgr[:,:,2],alpha_channel))
-    elif img_u8.ndim == 3 and img_u8.shape[2] == 3: # Assume RGB input
+    elif img_u8.ndim == 3 and img_u8.shape[2] == 3: 
         if output_format.upper() == "BGR":
             return cv2.cvtColor(img_u8, cv2.COLOR_RGB2BGR)
         elif output_format.upper() == "BGRA":
             bgr = cv2.cvtColor(img_u8, cv2.COLOR_RGB2BGR)
             alpha_channel = np.full((img_u8.shape[0], img_u8.shape[1]), alpha_byte, dtype=np.uint8)
             return cv2.merge((bgr[:,:,0],bgr[:,:,1],bgr[:,:,2],alpha_channel))
-    elif img_u8.ndim == 3 and img_u8.shape[2] == 4: # Assume RGBA input
+    elif img_u8.ndim == 3 and img_u8.shape[2] == 4: 
         if output_format.upper() == "BGR":
             return cv2.cvtColor(img_u8, cv2.COLOR_RGBA2BGR)
         elif output_format.upper() == "BGRA":
