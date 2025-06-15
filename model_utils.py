@@ -250,7 +250,7 @@ def load_latest_checkpoint(model, checkpoint_dir, device):
 
     norm_dir = os.path.normpath(checkpoint_dir)
     base_dir_name = os.path.basename(norm_dir)
-    use_weights_only_false = "model1_fra_henrik" in base_dir_name.lower()
+    use_weights_only_false = True
     final_weights_only_flag = not use_weights_only_false
     logger.debug(f"Checkpoint Dir: {checkpoint_dir}, Base: {base_dir_name}, Use weights_only=False Flag: {use_weights_only_false}, Final weights_only value: {final_weights_only_flag}")
 

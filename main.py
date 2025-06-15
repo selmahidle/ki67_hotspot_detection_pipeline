@@ -8,7 +8,8 @@ from PIL import Image
 from model_utils import (
     create_model,
     create_and_load_attention_unet,
-    load_model_checkpoint
+    load_model_checkpoint,
+    load_models_from_subdirs
 )
 from pipeline import process_slide_ki67
 from datetime import datetime
@@ -82,12 +83,22 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Ki67 Hotspot Analysis on a WSI")
     parser.add_argument("--slide_path", type=str, required=True, help="Path to the input WSI file.")
     parser.add_argument("--output_dir", type=str, default=default_output_dir, help="Directory to save output images and results.")
-    parser.add_argument("--tumor_model_path", type=str, required=True, help="Path to the trained tumor segmentation model (.pth file).")
+    
+    # --- Updated Arguments for Optional Workflows ---
+    parser.add_argument("--tumor_model_path", type=str, default=None, help="Path to a single trained tumor segmentation model (.pth file).")
+    parser.add_argument("--tumor_model_base_dir", type=str, default=None, help="Base directory of tumor models for consensus mode. Each subfolder should contain one model.")
+    
     parser.add_argument("--tumor_model_type", type=str, default="DeepLabV3Plus", help="Tumor segmentation model type (e.g., DeepLabV3Plus, Unet).")
     parser.add_argument("--tumor_encoder", type=str, default="resnet18", help="Encoder backbone for the tumor segmentation model.")
     parser.add_argument("--attention_unet_path", type=str, required=True, help="Path to the trained AttentionUNet .pth file for cell segmentation.")
 
     args = parser.parse_args()
+    
+    # --- Argument Validation ---
+    if not (args.tumor_model_path or args.tumor_model_base_dir) or \
+       (args.tumor_model_path and args.tumor_model_base_dir):
+        parser.error("Please provide exactly one of --tumor_model_path (for single model) or --tumor_model_base_dir (for consensus mode).")
+
     os.makedirs(args.output_dir, exist_ok=True)
 
     log_file = os.path.join(args.output_dir, "pipeline.log")
@@ -102,29 +113,52 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
 
-    logger.info("Loading Models...")
-    logger.info(f"Creating tumor model ({args.tumor_model_type} with {args.tumor_encoder} encoder)...")
-    tumor_model = create_model(
-        model_type=args.tumor_model_type,
-        encoder=args.tumor_encoder,
-        encoder_weights=None, 
-        num_classes=1,        
-        activation=None     
-    )
-    if tumor_model is None:
-        logger.error("Failed to create tumor model structure. Exiting.")
-        exit()
+    logger.info("--- Loading Tumor Model(s) ---")
+    tumor_models = []
 
-    logger.info(f"Loading tumor model checkpoint from: {args.tumor_model_path}")
-    try:
-        tumor_model = load_model_checkpoint(tumor_model, args.tumor_model_path, device, weights_only=True)
-        tumor_model.eval()
-        tumor_model.to(device)
-        logger.info("Tumor model loaded successfully.")
-    except Exception as e:
-        logger.error(f"Failed to load tumor model checkpoint: {e}", exc_info=True)
-        exit()
+    # --- Logic to load single model or multiple models for consensus ---
+    if args.tumor_model_path:
+        logger.info(f"--- Single Tumor Model Workflow ---")
+        logger.info(f"Creating tumor model ({args.tumor_model_type} with {args.tumor_encoder} encoder)...")
+        # For single model workflow, num_classes is 1 (binary mask output) and activation is None for BCEWithLogitsLoss
+        tumor_model = create_model(
+            model_type=args.tumor_model_type,
+            encoder=args.tumor_encoder,
+            encoder_weights=None, 
+            num_classes=1,        
+            activation=None     
+        )
+        if tumor_model is None:
+            logger.error("Failed to create tumor model structure. Exiting.")
+            exit()
 
+        logger.info(f"Loading tumor model checkpoint from: {args.tumor_model_path}")
+        try:
+            tumor_model = load_model_checkpoint(tumor_model, args.tumor_model_path, device, weights_only=True)
+            tumor_model.eval()
+            tumor_model.to(device)
+            tumor_models.append(tumor_model)
+            logger.info("Single tumor model loaded successfully.")
+        except Exception as e:
+            logger.error(f"Failed to load single tumor model checkpoint: {e}", exc_info=True)
+            exit()
+
+    elif args.tumor_model_base_dir:
+        logger.info(f"--- Consensus Tumor Model Workflow ---")
+        # Consensus workflow uses models with GroupNorm, num_classes=2 and sigmoid activation
+        tumor_models = load_models_from_subdirs(
+            base_dir=args.tumor_model_base_dir,
+            model_type=args.tumor_model_type,
+            encoder=args.tumor_encoder,
+            device=device,
+            apply_groupnorm=True
+        )
+        if not tumor_models:
+            logger.error(f"Failed to load any tumor models from base directory: {args.tumor_model_base_dir}. Exiting.")
+            exit()
+        logger.info(f"Successfully loaded {len(tumor_models)} tumor models for consensus.")
+
+    # --- Load Cell Model (No changes needed here) ---
     logger.info(f"Loading AttentionUNet cell model using checkpoint: {args.attention_unet_path}")
     cell_model_attention_unet = create_and_load_attention_unet(
         checkpoint_path=args.attention_unet_path,
@@ -135,15 +169,16 @@ if __name__ == "__main__":
         logger.error("AttentionUNet cell model could not be loaded. Exiting.")
         exit()
 
-    logger.info(f"Loaded 1 {args.tumor_model_type} ({args.tumor_encoder}) tumor model and 1 AttentionUNet cell model.")
+    logger.info(f"Loaded {len(tumor_models)} tumor model(s) and 1 AttentionUNet cell model.")
 
     stardist_model_instance = StarDist2D.from_pretrained('2D_versatile_fluo')
 
+    # --- Call Pipeline ---
     logger.info(f"Starting Ki67 hotspot analysis for: {args.slide_path}")
     hotspot_results = process_slide_ki67(
         slide_path=args.slide_path,
         output_dir=args.output_dir,
-        tumor_model=tumor_model, 
+        tumor_models=tumor_models, # Pass the list of models
         cell_model=cell_model_attention_unet,
         stardist_model=stardist_model_instance,
         device=device
