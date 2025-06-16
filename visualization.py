@@ -33,14 +33,14 @@ def format_for_save(img_array):
             max_val = np.max(img_array)
             min_val = np.min(img_array)
             if min_val < 0 or max_val > 1.0:
-                if np.isclose(min_val, max_val): 
+                if np.isclose(min_val, max_val):
                     img_array = np.zeros_like(img_array) if min_val < 0.5 else np.ones_like(img_array)
                 else:
-                    img_array = (img_array - min_val) / (max_val - min_val + 1e-9) 
-            img_array = np.clip(img_array, 0, 1) 
+                    img_array = (img_array - min_val) / (max_val - min_val + 1e-9)
+            img_array = np.clip(img_array, 0, 1)
         try:
             with warnings.catch_warnings():
-                warnings.simplefilter("ignore") 
+                warnings.simplefilter("ignore")
                 img_ubyte = img_as_ubyte(img_array)
         except ValueError as e:
             logger.warning(f"[{func_name}]: img_as_ubyte failed ({e}). Returning black image. Input stats: min={np.min(img_array)}, max={np.max(img_array)}, dtype={img_array.dtype}")
@@ -48,13 +48,13 @@ def format_for_save(img_array):
             return np.zeros((h, w, 3), dtype=np.uint8)
 
     if img_ubyte.ndim == 2:
-        return np.stack([img_ubyte] * 3, axis=-1) 
+        return np.stack([img_ubyte] * 3, axis=-1)
     elif img_ubyte.ndim == 3:
-        if img_ubyte.shape[2] == 1: 
-            return np.concatenate([img_ubyte] * 3, axis=-1) 
-        elif img_ubyte.shape[2] == 4: 
-            return img_ubyte[..., :3] 
-        elif img_ubyte.shape[2] == 3: 
+        if img_ubyte.shape[2] == 1:
+            return np.concatenate([img_ubyte] * 3, axis=-1)
+        elif img_ubyte.shape[2] == 4:
+            return img_ubyte[..., :3]
+        elif img_ubyte.shape[2] == 3:
             return img_ubyte
         else:
             logger.warning(f"[{func_name}]: Unexpected channel count ({img_ubyte.shape[2]}) in image with shape {img_ubyte.shape}. Returning first 3 channels if possible, else black.")
@@ -71,8 +71,8 @@ def format_for_save(img_array):
 
 def save_stardist_comparison_plot(hs_patch_rgb, labels_filtered, ref_mask, save_path, classified_labels_dab=None):
     """
-    Generates and saves a Matplotlib comparison plot: 
-    1. Original patch 
+    Generates and saves a Matplotlib comparison plot:
+    1. Original patch
     2. Reference mask (Tumor)
     3. StarDist overlay
     4. DAB Classification (DAB+ Red, DAB- Green)
@@ -99,8 +99,8 @@ def save_stardist_comparison_plot(hs_patch_rgb, labels_filtered, ref_mask, save_
         if classified_labels_dab is not None and classified_labels_dab.size > 0:
             classified_labels_resized = resize(classified_labels_dab, original_shape, order=0, preserve_range=True, anti_aliasing=False).astype(classified_labels_dab.dtype)
 
-            dab_colors = [(0, 1, 0), (1, 0, 0)]  
-            
+            dab_colors = [(0, 1, 0), (1, 0, 0)]
+
             dab_viz_float = label2rgb(classified_labels_resized, bg_label=0, bg_color=(0,0,0), colors=dab_colors)
             dab_class_display = format_for_save(dab_viz_float)
 
@@ -132,7 +132,7 @@ def draw_label_contours_on_bgr(bgr_image_roi, labels, line_color=(0, 255, 0), li
     if labels.shape[:2] != bgr_image_roi.shape[:2]:
         logger.warning(f"draw_label_contours_on_bgr: Shape mismatch labels {labels.shape} vs ROI {bgr_image_roi.shape}. Resizing labels.")
         try:
-            labels_resized = cv2.resize(labels.astype(np.uint16), 
+            labels_resized = cv2.resize(labels.astype(np.uint16),
                                      (bgr_image_roi.shape[1], bgr_image_roi.shape[0]),
                                      interpolation=cv2.INTER_NEAREST)
             labels_to_process = labels_resized
@@ -222,9 +222,9 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                 if dab_px_in_obj.size == 0: continue
 
                 counts = np.bincount(dab_px_in_obj.astype(int), minlength=3)
-                
+
                 n_neg, n_pos = counts[1], counts[2]
-                
+
 
                 fill_col, border_col = None, None
                 if n_pos > 0 and n_pos >= n_neg:
@@ -304,7 +304,7 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                 w_hl, h_hl = hotspot_data['size_level']
                 x_ol, y_ol = int(x_hl * sf_coords_hs_drawing), int(y_hl * sf_coords_hs_drawing)
                 w_ol, h_ol = int(w_hl * sf_coords_hs_drawing), int(h_hl * sf_coords_hs_drawing)
-                
+
                 roi = overlay_bgr[
                     min(max(0, y_ol), overlay_bgr.shape[0]) : min(y_ol + h_ol, overlay_bgr.shape[0]),
                     min(max(0, x_ol), overlay_bgr.shape[1]) : min(x_ol + w_ol, overlay_bgr.shape[1])
@@ -313,13 +313,13 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                 if roi.size > 0:
                     stardist_labels_for_hs = hotspot_data.get('stardist_labels')
                     classified_labels_dab_for_hs = hotspot_data.get('classified_labels_dab_hs')
-                    
+
                     if stardist_labels_for_hs is not None and classified_labels_dab_for_hs is not None:
                         _draw_stardist_in_roi(
-                            roi, 
-                            stardist_labels_for_hs, 
-                            classified_labels_dab_for_hs, 
-                            fill_alpha=0.4,  
+                            roi,
+                            stardist_labels_for_hs,
+                            classified_labels_dab_for_hs,
+                            fill_alpha=0.4,
                             border_thick=1
                         )
 
@@ -328,7 +328,7 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                 w_hl, h_hl = hotspot_data['size_level']
                 x_ol, y_ol = int(x_hl * sf_coords_hs_drawing), int(y_hl * sf_coords_hs_drawing)
                 w_ol, h_ol = int(w_hl * sf_coords_hs_drawing), int(h_hl * sf_coords_hs_drawing)
-                
+
                 hs_col = hotspot_box_colors[i % len(hotspot_box_colors)]
                 temp_box_layer = overlay_bgr.copy()
                 cv2.rectangle(temp_box_layer, (x_ol, y_ol), (x_ol + w_ol, y_ol + h_ol), hs_col, hs_box_thick)
@@ -344,14 +344,14 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                 lbl_text_hs = f"HS{i+1}"
                 if pi is not None: lbl_text_hs += f": {pi*100:.1f}%"
                 else: lbl_text_hs += ": N/A"
-                
+
                 (tw_hs, th_hs), bl_hs = cv2.getTextSize(lbl_text_hs, font, font_scale_hotspot_label, hs_lbl_thick)
                 text_y_baseline = max(th_hs + hs_text_bg_padding + 5, y_ol - bl_hs - hs_text_bg_padding - 5)
                 text_x_origin = max(hs_text_bg_padding + 5, x_ol + (w_ol - tw_hs) // 2)
 
                 bg_x1, bg_y1 = text_x_origin - hs_text_bg_padding, text_y_baseline - th_hs - hs_text_bg_padding
                 bg_x2, bg_y2 = text_x_origin + tw_hs + hs_text_bg_padding, text_y_baseline + bl_hs + hs_text_bg_padding
-                
+
                 bg_x1_cl, bg_y1_cl = max(0, bg_x1), max(0, bg_y1)
                 bg_x2_cl, bg_y2_cl = min(overlay_w, bg_x2), min(overlay_h, bg_y2)
 
@@ -361,7 +361,7 @@ def generate_overlay(slide, overlay_level, hotspot_level,
                         bg_color_patch = np.full_like(text_bg_roi_on_overlay, hs_text_bg_color_bgr)
                         blended_roi = cv2.addWeighted(bg_color_patch, hs_text_bg_alpha, text_bg_roi_on_overlay, 1 - hs_text_bg_alpha, 0)
                         overlay_bgr[bg_y1_cl:bg_y2_cl, bg_x1_cl:bg_x2_cl] = blended_roi
-                
+
                 text_color_bgr, shadow_color_bgr = (255,255,255), (0,0,0)
                 cv2.putText(overlay_bgr, lbl_text_hs, (text_x_origin + 1, text_y_baseline + 1), font, font_scale_hotspot_label, shadow_color_bgr, hs_lbl_thick + 1, cv2.LINE_AA)
                 cv2.putText(overlay_bgr, lbl_text_hs, (text_x_origin, text_y_baseline), font, font_scale_hotspot_label, text_color_bgr, hs_lbl_thick, cv2.LINE_AA)
@@ -375,11 +375,11 @@ def generate_overlay(slide, overlay_level, hotspot_level,
 
         def draw_legend_item(img, y_pos, color, txt, is_outline=False, outline_color_actual=None):
             if is_outline and outline_alpha < 1.0:
-                approx_bg_color = np.array([128, 128, 128], dtype=np.uint8) 
+                approx_bg_color = np.array([128, 128, 128], dtype=np.uint8)
                 current_outline_color = outline_color_actual if outline_color_actual else color
                 if isinstance(current_outline_color, tuple) or isinstance(current_outline_color, list):
                      line_color_arr = np.array(current_outline_color, dtype=np.uint8)
-                else: 
+                else:
                      line_color_arr = np.array(color, dtype=np.uint8)
 
 
@@ -401,12 +401,12 @@ def generate_overlay(slide, overlay_level, hotspot_level,
         legend_items = [
             (tissue_color, "Tissue Outline", True, tissue_color),
             (tumor_color, "Tumor Outline", True, tumor_color),
-            (cell_region_fill_color, "Tumor Cell Region", False), 
-            (dab_intersect_cell_border_color, "DAB+ in Tumor Cell Mask (Border)", True, dab_intersect_cell_border_color), 
-            (dab_intersect_cell_fill_color, "DAB+ in Tumor Cell Mask (Fill)", False), 
-            (hotspot_box_colors[0], "Hotspot Region (Example)", True, hotspot_box_colors[0]), 
-            ((0, 0, 255), "DAB+ StarDist Cells (in HS)", False), 
-            ((0, 255, 0), "DAB- StarDist Cells (in HS)", False)  
+            (cell_region_fill_color, "Tumor Cell Region", False),
+            (dab_intersect_cell_border_color, "DAB+ in Tumor Cell Mask (Border)", True, dab_intersect_cell_border_color),
+            (dab_intersect_cell_fill_color, "DAB+ in Tumor Cell Mask (Fill)", False),
+            (hotspot_box_colors[0], "Hotspot Region (Example)", True, hotspot_box_colors[0]),
+            ((0, 0, 255), "DAB+ StarDist Cells (in HS)", False),
+            ((0, 255, 0), "DAB- StarDist Cells (in HS)", False)
         ]
 
         for item_props in legend_items:
@@ -462,14 +462,14 @@ def format_image_for_save_rgba_or_bgr(
             bgr = cv2.cvtColor(img_gray, cv2.COLOR_GRAY2BGR)
             alpha_channel = np.full((img_gray.shape[0], img_gray.shape[1]), alpha_byte, dtype=np.uint8)
             return cv2.merge((bgr[:,:,0],bgr[:,:,1],bgr[:,:,2],alpha_channel))
-    elif img_u8.ndim == 3 and img_u8.shape[2] == 3: 
+    elif img_u8.ndim == 3 and img_u8.shape[2] == 3:
         if output_format.upper() == "BGR":
             return cv2.cvtColor(img_u8, cv2.COLOR_RGB2BGR)
         elif output_format.upper() == "BGRA":
             bgr = cv2.cvtColor(img_u8, cv2.COLOR_RGB2BGR)
             alpha_channel = np.full((img_u8.shape[0], img_u8.shape[1]), alpha_byte, dtype=np.uint8)
             return cv2.merge((bgr[:,:,0],bgr[:,:,1],bgr[:,:,2],alpha_channel))
-    elif img_u8.ndim == 3 and img_u8.shape[2] == 4: 
+    elif img_u8.ndim == 3 and img_u8.shape[2] == 4:
         if output_format.upper() == "BGR":
             return cv2.cvtColor(img_u8, cv2.COLOR_RGBA2BGR)
         elif output_format.upper() == "BGRA":
@@ -526,3 +526,92 @@ def create_line_overlay(image_rgb, labels, alpha=0.7, line_color=(0, 255, 0), li
 
     final_bgra_output = format_image_for_save_rgba_or_bgr(overlay_draw_rgb, "BGRA", target_alpha_value=alpha)
     return final_bgra_output
+
+
+def save_hotspot_visualizations(hotspot_target_mask, final_hotspots, hotspot_candidates,
+                                level, top_n_hotspots, debug_dir):
+    """
+    Saves debug visualizations for the hotspot identification process.
+    - A PNG of the binary target mask.
+    - An overlay showing the top N hotspots on the target mask.
+    - A density heatmap of all hotspot candidates.
+    """
+    if not final_hotspots:
+        logger.info("No final hotspots to visualize.")
+        return
+
+    os.makedirs(debug_dir, exist_ok=True)
+    logger.info(f"Saving hotspot debug visualizations to: {debug_dir}")
+
+    # 1. Save the raw target mask
+    target_mask_vis_path = os.path.join(debug_dir, f"hotspot_target_mask_l{level}.png")
+    try:
+        h, w = hotspot_target_mask.shape
+        bg_color = [220, 220, 220]  # Light Gray
+        fg_color = [139, 0, 0]      # Dark Blue
+
+        colorized_mask = np.zeros((h, w, 3), dtype=np.uint8)
+        colorized_mask[hotspot_target_mask == 0] = bg_color
+        colorized_mask[hotspot_target_mask == 1] = fg_color
+        
+        cv2.imwrite(target_mask_vis_path, colorized_mask)
+
+    except Exception as e_vis:
+        logger.error(f"Failed to save target mask visualization: {e_vis}")
+
+    # 2. Create and save the top hotspots overlay
+    try:
+        level_h, level_w = hotspot_target_mask.shape
+        hotspot_top_vis = cv2.cvtColor(hotspot_target_mask * 150, cv2.COLOR_GRAY2BGR)
+        colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255), (0, 255, 255)]
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.6
+        font_thickness = 2
+
+        for i, hotspot in enumerate(final_hotspots):
+            x, y = hotspot['coords_level']
+            w, h = hotspot['size_level']
+            color = colors[i % len(colors)]
+            cv2.rectangle(hotspot_top_vis, (x, y), (x + w, y + h), color, max(1, int(level_w * 0.0015)))
+            score_text = f"#{i+1}: {hotspot['density_score']:.3f}"
+            cv2.putText(hotspot_top_vis, score_text, (x + 5, y + 20), font, font_scale, color, font_thickness)
+
+        top_vis_path = os.path.join(debug_dir, f"top_{top_n_hotspots}_hotspots_l{level}.png")
+        cv2.imwrite(top_vis_path, hotspot_top_vis)
+        logger.info(f"Top hotspots visualization saved to {top_vis_path}")
+    except Exception as e_vis:
+        logger.error(f"Failed to save top hotspots visualization: {e_vis}")
+
+    # 3. Create and save the density heatmap
+    logger.info("Generating density heatmap (this might take a moment)...")
+    try:
+        if not hotspot_candidates:
+            logger.warning("No hotspot candidates available to generate a density map.")
+            return
+
+        level_h, level_w = hotspot_target_mask.shape
+        density_heatmap = np.zeros((level_h, level_w), dtype=np.float32)
+        weight_map = np.zeros((level_h, level_w), dtype=np.float32)
+        epsilon = 1e-6
+
+        for candidate in hotspot_candidates:
+            x, y = candidate['coords_level']
+            w, h = candidate['size_level']
+            score = candidate['density_score']
+            density_heatmap[y:y + h, x:x + w] += score
+            weight_map[y:y + h, x:x + w] += 1.0
+
+        valid_weights = weight_map > epsilon
+        density_heatmap[valid_weights] /= weight_map[valid_weights]
+
+        max_density = max(c['density_score'] for c in hotspot_candidates) if hotspot_candidates else 0.0
+        if max_density > 0:
+            density_heatmap /= max_density
+        density_heatmap = np.clip(density_heatmap, 0, 1)
+
+        heatmap_vis = cv2.applyColorMap(np.uint8(density_heatmap * 255), cv2.COLORMAP_JET)
+        heatmap_path = os.path.join(debug_dir, f"hotspot_density_heatmap_l{level}.png")
+        cv2.imwrite(heatmap_path, heatmap_vis)
+        logger.info(f"Density heatmap saved to {heatmap_path}")
+    except Exception as e_heatmap:
+        logger.error(f"Failed to generate or save density heatmap: {e_heatmap}", exc_info=True)

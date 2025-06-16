@@ -1,9 +1,9 @@
 import logging
-import os
 import numpy as np
-import cv2 
 from tqdm import tqdm
 import openslide
+import traceback
+from visualization import save_hotspot_visualizations
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +59,10 @@ def identify_hotspots(slide, level, hotspot_target_mask,
                 patch_target_mask = hotspot_target_mask[y_start:y_end, x_start:x_end]
                 density_score = np.mean(patch_target_mask) if patch_target_mask.size > 0 else 0.0
 
-                if density_score > 1e-6: 
+                if density_score > 1e-6:
                     hotspot_candidates.append({
-                        'coords_level': (x_start, y_start), 
-                        'size_level': (patch_w, patch_h),   
+                        'coords_level': (x_start, y_start),
+                        'size_level': (patch_w, patch_h),
                         'density_score': density_score,
                         'level': level
                     })
@@ -89,56 +89,17 @@ def identify_hotspots(slide, level, hotspot_target_mask,
                           f"Density: {hotspot['density_score']:.4f}")
 
         if debug_dir and final_hotspots:
-            os.makedirs(debug_dir, exist_ok=True) 
-            logger.info(f"Saving hotspot debug visualizations to: {debug_dir}")
-
-            target_mask_vis_path = os.path.join(debug_dir, f"hotspot_target_mask_l{level}.png")
             try:
-                 cv2.imwrite(target_mask_vis_path, hotspot_target_mask * 255)
+                save_hotspot_visualizations(
+                    hotspot_target_mask=hotspot_target_mask,
+                    final_hotspots=final_hotspots,
+                    hotspot_candidates=hotspot_candidates,
+                    level=level,
+                    top_n_hotspots=top_n_hotspots,
+                    debug_dir=debug_dir
+                )
             except Exception as e_vis:
-                 logger.error(f"Failed to save target mask visualization: {e_vis}")
-
-            hotspot_top_vis = cv2.cvtColor(hotspot_target_mask * 150, cv2.COLOR_GRAY2BGR) 
-            colors = [(255,0,0), (0,255,0), (0,0,255), (255,255,0), (255,0,255), (0,255,255)] 
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            for i, hotspot in enumerate(final_hotspots):
-                x, y = hotspot['coords_level']
-                w, h = hotspot['size_level']
-                color = colors[i % len(colors)]
-                cv2.rectangle(hotspot_top_vis, (x, y), (x+w, y+h), color, max(1, int(level_w * 0.0015)))
-                score_text = f"#{i+1}: {hotspot['density_score']:.3f}"
-                cv2.putText(hotspot_top_vis, score_text, (x + 5, y + 20), font, 0.6, color, 2)
-            top_vis_path = os.path.join(debug_dir, f"top_{top_n_hotspots}_hotspots_l{level}.png")
-            try:
-                cv2.imwrite(top_vis_path, hotspot_top_vis)
-            except Exception as e_vis:
-                 logger.error(f"Failed to save top hotspots visualization: {e_vis}")
-
-            logger.info("Generating density heatmap (this might take a moment)...")
-            try:
-                density_heatmap = np.zeros((level_h, level_w), dtype=np.float32)
-                weight_map = np.zeros((level_h, level_w), dtype=np.float32)
-                epsilon = 1e-6
-                for candidate in hotspot_candidates:
-                    x, y = candidate['coords_level']
-                    w, h = candidate['size_level']
-                    score = candidate['density_score']
-                    density_heatmap[y:y+h, x:x+w] += score
-                    weight_map[y:y+h, x:x+w] += 1.0
-
-                valid_weights = weight_map > epsilon
-                density_heatmap[valid_weights] /= weight_map[valid_weights]
-
-                if max_density > 0:
-                     density_heatmap /= max_density
-                density_heatmap = np.clip(density_heatmap, 0, 1)
-
-                heatmap_vis = cv2.applyColorMap(np.uint8(density_heatmap * 255), cv2.COLORMAP_JET)
-                heatmap_path = os.path.join(debug_dir, f"hotspot_density_heatmap_l{level}.png")
-                cv2.imwrite(heatmap_path, heatmap_vis)
-                logger.info("Density heatmap saved.")
-            except Exception as e_heatmap:
-                 logger.error(f"Failed to generate or save density heatmap: {e_heatmap}")
+                logger.error(f"An error occurred during hotspot visualization generation: {e_vis}", exc_info=True)
 
 
         logger.info(f"Successfully identified {len(final_hotspots)} top hotspots.")
